@@ -293,58 +293,6 @@ npm run build
 
 ---
 
-## 🎬 3-Minute Live Demonstration Sequence
-
-Follow this exact demonstration script to evaluate all features against real FalkorDB GraphBLAS queries:
-
-### **Minute 0:00 – 0:45: Threat Ingestion & Sub-Millisecond Autonomous Sweep**
-1. Open `http://localhost:3000`. Observe the Top Navigation Ribbon showing `FalkorDB GraphBLAS v6` connected to tenant `sec_ops_tenant_alpha`.
-2. Notice the Command Center pre-populated with Patient Zero `host-0` (`Workstation-PatientZero`).
-3. Click **"Run Autonomous Investigation"**.
-4. Observe the live audit console stream and metrics strip populate in **under 40 milliseconds**:
-   - **Exposure Paths**: `14` reachable lateral propagation vectors.
-   - **Traversal Time**: `~32.4 ms` FalkorDB GraphBLAS query.
-   - **Perimeter Egress**: `43.0 Mbps` simulated MaxFlow bottleneck.
-   - **High-Value Database**: `HR-Payroll-DB` (`PII_RESTRICTED`, 1 hop away via `FileBackupServer`).
-
-### **Minute 0:45 – 1:30: Multi-Hop Vector Reasoning & Risk Priorities**
-1. Scroll to **Section 4: Connected Graph Explorer**.
-   - Inspect the interactive SVG topology. Observe clear spacing with zero label clipping or overlapping.
-   - Click node `host-0` or `db-1` to open the slide-out **Node Inspector Drawer**. View asset properties, GraphBLAS metrics, and team ownership.
-2. Scroll to **Section 5: Risk Priorities**.
-   - Note the ranking order sorted strictly descending by FalkorDB GraphBLAS PageRank score:
-     1. `EgressFirewall` (`0.0649`) — Perimeter sink
-     2. `VLAN-Router` (`0.0389`) — Core transit
-     3. `PublicWebServer` (`0.0351`) — Ingress gateway
-     4. `JumpServer-SysAdmin` (`0.0279`) — Bastion
-     5. `ReverseProxy` (`0.0279`) — TLS proxy
-     6. `FileBackupServer` (`0.0162`) — Database storage node
-     7. `AppServer-Internal` (`0.0162`) — Internal API core
-
-### **Minute 1:30 – 2:15: Live Evidence Composer & Company Brain Resolution**
-1. Scroll to **Section 6: Live Evidence Composer**.
-   - Click between query tabs: `MultiHopTraversal.cyp`, `ShortestPathDB.cyp`, `PageRankCentrality.cyp`, `MaxFlowEgress.cyp`, `CompanyBrain.cyp`, `EpisodicMemory.cyp`.
-   - Verify that displayed parameters (`host-0`, `sec_ops_tenant_alpha`), sub-millisecond latencies, and structured JSON outputs match actual recorded executions.
-2. Scroll to **Section 7: Investigation Evidence & Knowledge Dossier**.
-   - Click the **"Company Knowledge"** tab: Inspect the organizational traversal mapping `host-0` to `SecOps Incident Response`, On-Call Lead `Alex Rivera`, and the `Workstation Lateral Movement Containment SOP (rb-iso-001)`.
-   - Click the **"Threat Memory & Audit"** tab: Inspect persistent episodic memory findings stored in FalkorDB.
-
-### **Minute 2:15 – 3:00: Guarded Human Review, Containment Execution & Verification**
-1. Return to **Section 3: Incident Triage & Action Deck**.
-   - On the `Workstation-PatientZero` incident card, click **"Propose Containment"**.
-   - Notice that the action does **not** auto-approve. The Guarded Review prompt appears: *"Proposal created. Awaiting authorized reviewer decision."*
-   - As authorized reviewer, click **"Approve & Execute Containment"**.
-   - Observe real-time execution feedback: `✓ APPROVED & CONTAINED (GRAPH_TOPOLOGY_SIMULATION) · Severed: 14 paths · Reduced Egress: 43.0 Mbps`.
-2. Scroll to **Section 7: Before & After Impact Tab**.
-   - Observe the Post-Action State update from `PENDING AUTHORIZATION` to **`TOPOLOGY SEVERED`**:
-     - Host Status: `CONTAINED (SIM)`
-     - Lateral Attack Paths: `0 active (14 paths severed)`
-     - Perimeter Egress: `0.0 Mbps (43.0 Mbps eliminated)`
-     - Database Vector: `Blocked by Host Isolation`
-3. Check the **Incident Response Lifecycle Stepper** (Section 2): Stages 1 through 8 are fully verified.
-
----
-
 ## 🧪 Automated Test Suite & Quality Verification
 
 RootMesh has undergone comprehensive test validation across the entire stack:
