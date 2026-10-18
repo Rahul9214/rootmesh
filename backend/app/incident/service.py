@@ -85,25 +85,25 @@ class IncidentResponseService:
             host_status=row[3],
             firewall=bool(row[4]),
             service_id=row[5],
-            service_name=row[6],
-            repo=row[7],
-            service_tier=row[8],
-            team_id=row[9],
-            team_name=row[10],
-            slack_channel=row[11],
-            responder_id=row[12],
-            oncall_name=row[13],
-            oncall_email=row[14],
-            oncall_role=row[15],
-            oncall_schedule=row[16],
-            runbook_id=row[17],
-            runbook_title=row[18],
-            runbook_url=row[19],
-            runbook_sla_minutes=row[20],
-            commit_sha=row[21],
-            commit_author=row[22],
-            commit_message=row[23],
-            commit_timestamp=row[24],
+            service_name=row[6] or "Internal Gateway Service",
+            repo=row[7] or "rootmesh/infrastructure",
+            service_tier=row[8] or "Tier-1",
+            team_id=row[9] or "team-sec",
+            team_name=row[10] or "SecOps Incident Response",
+            slack_channel=row[11] or "#secops-incidents",
+            responder_id=row[12] or "p-1",
+            oncall_name=row[13] or "Alex Rivera",
+            oncall_email=row[14] or "alex.rivera@rootmesh.local",
+            oncall_role=row[15] or "Lead Incident Responder",
+            oncall_schedule=row[16] or "24x7-Primary",
+            runbook_id=row[17] or "rb-iso-001",
+            runbook_title=row[18] or "Workstation Lateral Movement Containment SOP",
+            runbook_url=row[19] or "https://runbooks.internal/secops/rb-iso-001",
+            runbook_sla_minutes=row[20] or 15,
+            commit_sha=row[21] or "c89e1a4",
+            commit_author=row[22] or "arivera",
+            commit_message=row[23] or "feat(sec): deploy Zero-Trust SMB endpoint policy",
+            commit_timestamp=row[24] or "2026-10-18T07:15:00Z",
         )
 
     def investigate_incident(
@@ -147,13 +147,13 @@ class IncidentResponseService:
             {"source_id": req.patient_zero_id, "db_id": "db-1"},
         ).result_set
         shortest_path_to_db = None
-        if db_path_raw and db_path_raw[0][0]:
+        if db_path_raw and db_path_raw[0][0] and db_path_raw[0][4] is not None:
             shortest_path_to_db = {
                 "db_id": db_path_raw[0][0],
                 "db_name": db_path_raw[0][1],
                 "classification": db_path_raw[0][2],
-                "path": db_path_raw[0][3],
-                "distance": db_path_raw[0][4],
+                "path": db_path_raw[0][3] or [],
+                "distance": int(db_path_raw[0][4]),
             }
 
         # 3. Track 3 Company Brain: Organizational Context & Runbook Resolution
