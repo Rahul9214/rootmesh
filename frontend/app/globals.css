@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────
+   RootMesh — Autonomous Threat Memory & Incident Response Design System
+   ────────────────────────────────────────────── */
+
+:root {
+  --color-canvas:    #0B0D12;
+  --color-amethyst:  #8B5CF6;
+  --color-amber:     #FFB800;
+  --color-danger:    #FF453A;
+  --color-surface:   #111318;
+  --color-border:    #1E2130;
+  --font-sans:       var(--font-inter, "Inter", system-ui, sans-serif);
+  --font-mono:       var(--font-mono, "JetBrains Mono", monospace);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-canvas);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(139, 92, 246, 0.10) 0%, transparent 60%),
+    url("data:image/svg+xml,%3Csvg width='40' height='40' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='1' cy='1' r='0.75' fill='%23ffffff06'/%3E%3C/svg%3E");
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+/* ── Scrollbar ─────────────────────────────── */
+::-webkit-scrollbar         { width: 5px; height: 5px; }
+::-webkit-scrollbar-track   { background: #0d1017; }
+::-webkit-scrollbar-thumb   { background: #2d2060; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #4a3090; }
+
+/* ── Typography ───────────────────────────── */
+.font-mono { font-family: var(--font-mono); }
+
+/* ── Glow utilities ───────────────────────── */
+.glow-amethyst { box-shadow: 0 0 24px rgba(139, 92, 246, 0.30); }
+.glow-amber    { box-shadow: 0 0 24px rgba(255, 184, 0, 0.30);   }
+.glow-danger   { box-shadow: 0 0 24px rgba(255, 69, 58, 0.35);   }
+
+/* ── Animated gradient border ─────────────── */
+@keyframes border-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+.border-pulse { animation: border-pulse 2s ease-in-out infinite; }
+
+/* ── Amethyst gradient text ───────────────── */
+.text-gradient-amethyst {
+  background: linear-gradient(135deg, #8B5CF6 0%, #A78BFA 50%, #C4B5FD 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
