@@ -2,18 +2,22 @@
 RootMesh — Guarded Incident Response Router
 Exposes the 8-stage lifecycle endpoints:
 Incident → Investigation → Graph Evidence → Risk Assessment → Proposed Action → Authorized Review → Execution → Verification → Audit
+And Track 3 Company Brain organizational traversal endpoints.
 """
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.incident.models import (
     ActionProposal,
+    CompanyBrainContext,
     ExecuteActionRequest,
     ExecutionAuditResponse,
+    IncidentInvestigationReport,
+    IncidentInvestigationRequest,
     ProposeActionRequest,
     ReviewActionRequest,
 )
@@ -28,6 +32,19 @@ from app.agents.memory import MemoryAgent
 
 logger = logging.getLogger("RootMesh-IncidentRouter")
 router = APIRouter(prefix="/api/v1/incident", tags=["Guarded Incident Response"])
+
+
+@router.post("/investigate", response_model=IncidentInvestigationReport)
+async def investigate_threat(
+    req: IncidentInvestigationRequest,
+    principal: SecurityPrincipal = Depends(require_permission("threat:read")),
+):
+    """
+    Track 1, 2, 3: Full Autonomous Investigation.
+    Executes multi-hop traversal, blast-radius UDF, MaxFlow egress risk, shortest path to databases,
+    resolves Company Brain ownership, and persists episodic finding and incident graph in FalkorDB.
+    """
+    return incident_service.investigate_incident(principal=principal, req=req)
 
 
 @router.post("/propose", response_model=ActionProposal)
@@ -60,9 +77,9 @@ async def execute_containment(
     principal: SecurityPrincipal = Depends(require_permission("containment:execute")),
 ):
     """
-    Stage 7 & 8: Execution, Verification & Audit.
-    Applies graph-level simulated containment, verifies in FalkorDB, and records immutable procedural memory.
-    Guarantees replay attack prevention through durable idempotency keys.
+    Stage 7 & 8: Execution, Verification, Re-Analysis & Audit.
+    Applies graph-level simulated containment, verifies in FalkorDB, calculates before/after differences,
+    and records immutable procedural memory. Guarantees replay attack prevention through durable idempotency keys.
     """
     return incident_service.execute_action(principal=principal, req=req)
 
@@ -83,6 +100,20 @@ async def get_proposal_status(
     return proposal
 
 
+@router.get("/company-brain/{tenant_id}/{host_id}", response_model=CompanyBrainContext)
+async def get_company_brain(
+    tenant_id: str,
+    host_id: str,
+    principal: SecurityPrincipal = Depends(require_permission("threat:read")),
+):
+    """
+    Track 3 Company Brain: Traverses organizational ownership:
+    Compromised host → affected service → owning team → on-call person → relevant runbook / change provenance.
+    """
+    enforce_tenant_context(tenant_id, principal)
+    return incident_service.resolve_company_brain(tenant_id=tenant_id, host_id=host_id)
+
+
 @router.get("/procedural-memory/{tenant_id}/{host_id}")
 async def get_procedural_memory(
     tenant_id: str,
@@ -93,3 +124,14 @@ async def get_procedural_memory(
     enforce_tenant_context(tenant_id, principal)
     agent = MemoryAgent(tenant_id=tenant_id)
     return agent.recall_procedural_memory(host_id=host_id)
+
+
+@router.get("/{tenant_id}/{incident_id}")
+async def get_incident_details(
+    tenant_id: str,
+    incident_id: str,
+    principal: SecurityPrincipal = Depends(require_permission("threat:read")),
+):
+    """Recalls complete durable incident provenance, findings, and audit history from FalkorDB."""
+    enforce_tenant_context(tenant_id, principal)
+    return incident_service.get_incident(tenant_id=tenant_id, incident_id=incident_id)

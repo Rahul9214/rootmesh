@@ -116,3 +116,77 @@ RETURN h.id AS id, h.name AS name, h.ip AS ip,
        h.edr AS edr, h.smb_signing AS smb_signing, h.firewall AS firewall
 LIMIT 1
 """
+
+# ──────────────────────────────────────────────
+# Track 3: Company Brain Full Organizational Traversal
+# ──────────────────────────────────────────────
+
+RESOLVE_COMPANY_BRAIN = """
+MATCH (h:Host {id: $host_id})
+OPTIONAL MATCH (h)-[:RUNS_SERVICE]->(s:Service)
+OPTIONAL MATCH (t:Team)-[:OWNS_SERVICE|OWNS]->(s)
+OPTIONAL MATCH (t_direct:Team)-[:OWNS]->(h)
+WITH h, s, coalesce(t, t_direct) AS owning_team
+OPTIONAL MATCH (p:Person)-[oncall:ONCALL_FOR]->(owning_team)
+OPTIONAL MATCH (s)-[:HAS_RUNBOOK]->(rb:Runbook)
+OPTIONAL MATCH (s)-[:HAS_CHANGE]->(cm:Commit)
+RETURN h.id AS host_id, h.name AS host_name, h.ip AS host_ip,
+       coalesce(h.status, 'SAFE') AS host_status, coalesce(h.firewall, false) AS firewall,
+       s.id AS service_id, s.name AS service_name, s.repo AS repo, s.tier AS service_tier,
+       owning_team.id AS team_id, owning_team.name AS team_name, owning_team.slack_channel AS slack_channel,
+       p.id AS responder_id, p.name AS oncall_name, p.email AS oncall_email, p.role AS oncall_role,
+       coalesce(oncall.schedule, '24x7-Primary') AS oncall_schedule,
+       rb.id AS runbook_id, rb.title AS runbook_title, rb.url AS runbook_url, rb.sla_minutes AS runbook_sla_minutes,
+       cm.sha AS commit_sha, cm.author AS commit_author, cm.message AS commit_message, cm.timestamp AS commit_timestamp
+LIMIT 1
+"""
+
+# ──────────────────────────────────────────────
+# Track 1 & 2: Containment Re-Analysis
+# ──────────────────────────────────────────────
+
+REANALYZE_CONTAINMENT = """
+MATCH (h:Host {id: $host_id})
+OPTIONAL MATCH (h)-[:COMMUNICATES]->(direct:Host)
+OPTIONAL MATCH active_path = (h)-[:COMMUNICATES*1..4]->(target:Host)
+  WHERE ALL(n IN nodes(active_path) WHERE coalesce(n.firewall, false) = false)
+RETURN
+  h.id AS host_id,
+  h.name AS host_name,
+  coalesce(h.status, 'SAFE') AS status,
+  coalesce(h.firewall, false) AS firewall,
+  count(DISTINCT direct) AS total_direct_peers,
+  count(DISTINCT active_path) AS active_uncontained_paths
+"""
+
+# ──────────────────────────────────────────────
+# Track 1: Shortest Path to High-Value Data Asset
+# ──────────────────────────────────────────────
+
+SHORTEST_PATH_TO_DATABASE = """
+MATCH (source:Host {id: $source_id}), (db:Database {id: $db_id})
+MATCH (db)-[:STORED_ON]->(storage_host:Host)
+WITH source, storage_host, db, shortestPath((source)-[:COMMUNICATES|EXPOSED_TO*]->(storage_host)) AS path
+RETURN db.id AS db_id, db.name AS db_name, db.classification AS classification,
+       [n IN nodes(path) | n.name] AS path_to_host, length(path) AS distance
+LIMIT 1
+"""
+
+# ──────────────────────────────────────────────
+# Track 2: Incident Provenance Graph Persistence
+# ──────────────────────────────────────────────
+
+PERSIST_INCIDENT_GRAPH = """
+MATCH (h:Host {id: $patient_zero_id})
+CREATE (inc:Incident {
+  id:              $incident_id,
+  title:           $title,
+  severity:        $severity,
+  status:          $status,
+  patient_zero_id: $patient_zero_id,
+  created_at:      $created_at
+})
+CREATE (inc)-[:TARGETS]->(h)
+RETURN inc.id AS incident_id
+"""
+
