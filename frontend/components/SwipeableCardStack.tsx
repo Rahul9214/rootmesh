@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { motion, AnimatePresence, PanInfo } from "framer-motion";
+import { authenticatedFetch } from "@/lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TENANT_ID = "sec_ops_tenant_alpha";
@@ -41,7 +42,7 @@ export const SwipeableCardStack: React.FC = () => {
       setContained((p) => [...p, card.id]);
       // Real backend containment call in FalkorDB
       try {
-        await fetch(`${API_BASE}/api/v1/threat/contain`, {
+        await authenticatedFetch(`${API_BASE}/api/v1/threat/contain`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tenant_id: TENANT_ID, host_id: card.target_host_id }),
@@ -65,7 +66,7 @@ export const SwipeableCardStack: React.FC = () => {
   const persistFinding = async (card: IncidentCard) => {
     setSavingMemory(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/threat/memory/finding`, {
+      const res = await authenticatedFetch(`${API_BASE}/api/v1/threat/memory/finding`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

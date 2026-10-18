@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
+import { authenticatedFetch } from "@/lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TENANT_ID = "sec_ops_tenant_alpha";
@@ -19,7 +20,7 @@ export const GraphCanvas: React.FC = () => {
   const [falkorUrl] = useState("http://localhost:3005");
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/threat/pagerank/${TENANT_ID}`)
+    authenticatedFetch(`${API_BASE}/api/v1/threat/pagerank/${TENANT_ID}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();

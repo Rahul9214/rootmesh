@@ -2,6 +2,7 @@
 RootMesh — Threat Graph Router
 Exposes multi-hop traversal, PageRank, MaxFlow, Shortest Path, Topology,
 Containment (Graph-Level Simulation), Finding memory, and on-call owner APIs.
+Guarded by cryptographic principal authentication and tenant-bound authorization.
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import logging
 import time
 from typing import List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.config import settings
 from app.db.falkor_client import db_pool
@@ -31,20 +32,15 @@ from app.models.schemas import (
     TraversalRequest,
     TraversalResponse,
 )
+from app.security.auth import (
+    SecurityPrincipal,
+    enforce_tenant_context,
+    get_current_principal,
+    require_permission,
+)
 
 logger = logging.getLogger("RootMesh-Router")
 router = APIRouter(prefix="/api/v1/threat", tags=["Threat Intelligence"])
-
-
-def _verify_tenant(tenant_id: str) -> None:
-    """Enforce strict tenant authorization and format validation."""
-    if not settings.is_valid_tenant(tenant_id):
-        raise HTTPException(status_code=400, detail=f"Malformed tenant ID format: '{tenant_id}'")
-    if tenant_id not in settings.authorized_tenants:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Access denied: Tenant '{tenant_id}' is not authorized on this RootMesh node."
-        )
 
 
 # ──────────────────────────────────────────────
@@ -52,9 +48,12 @@ def _verify_tenant(tenant_id: str) -> None:
 # ──────────────────────────────────────────────
 
 @router.post("/traverse", response_model=TraversalResponse)
-async def traverse_attack_paths(req: TraversalRequest):
+async def traverse_attack_paths(
+    req: TraversalRequest,
+    principal: SecurityPrincipal = Depends(get_current_principal),
+):
     """Execute variable-length Cypher traversal (*1..N) from Patient Zero host."""
-    _verify_tenant(req.tenant_id)
+    enforce_tenant_context(req.tenant_id, principal)
     t0 = time.perf_counter()
     try:
         graph = db_pool.get_tenant_graph(req.tenant_id)
@@ -88,9 +87,12 @@ async def traverse_attack_paths(req: TraversalRequest):
 # ──────────────────────────────────────────────
 
 @router.get("/pagerank/{tenant_id}", response_model=List[PageRankEntry])
-async def get_load_bearing_assets(tenant_id: str):
+async def get_load_bearing_assets(
+    tenant_id: str,
+    principal: SecurityPrincipal = Depends(get_current_principal),
+):
     """Run PageRank across Host nodes to surface highest-criticality infrastructure."""
-    _verify_tenant(tenant_id)
+    enforce_tenant_context(tenant_id, principal)
     try:
         graph = db_pool.get_tenant_graph(tenant_id)
         results = graph.ro_query(queries.PAGE_RANK_ASSETS).result_set
@@ -108,9 +110,12 @@ async def get_load_bearing_assets(tenant_id: str):
 # ──────────────────────────────────────────────
 
 @router.post("/egress", response_model=MaxFlowResponse)
-async def calculate_max_egress(req: MaxFlowRequest):
+async def calculate_max_egress(
+    req: MaxFlowRequest,
+    principal: SecurityPrincipal = Depends(get_current_principal),
+):
     """Compute maximum data exfiltration bandwidth using FalkorDB algo.maxFlow."""
-    _verify_tenant(req.tenant_id)
+    enforce_tenant_context(req.tenant_id, principal)
     t0 = time.perf_counter()
     try:
         graph = db_pool.get_tenant_graph(req.tenant_id)
@@ -137,9 +142,12 @@ async def calculate_max_egress(req: MaxFlowRequest):
 # ──────────────────────────────────────────────
 
 @router.post("/shortest-path", response_model=ShortestPathResponse)
-async def find_shortest_attack_path(req: ShortestPathRequest):
+async def find_shortest_attack_path(
+    req: ShortestPathRequest,
+    principal: SecurityPrincipal = Depends(get_current_principal),
+):
     """Compute shortest attack route between source and target in FalkorDB."""
-    _verify_tenant(req.tenant_id)
+    enforce_tenant_context(req.tenant_id, principal)
     t0 = time.perf_counter()
     try:
         graph = db_pool.get_tenant_graph(req.tenant_id)
@@ -171,9 +179,12 @@ async def find_shortest_attack_path(req: ShortestPathRequest):
 # ──────────────────────────────────────────────
 
 @router.get("/topology/{tenant_id}", response_model=List[TopologyNode])
-async def get_network_topology(tenant_id: str):
+async def get_network_topology(
+    tenant_id: str,
+    principal: SecurityPrincipal = Depends(get_current_principal),
+):
     """Fetch live host nodes, status, and firewall flags directly from FalkorDB."""
-    _verify_tenant(tenant_id)
+    enforce_tenant_context(tenant_id, principal)
     try:
         graph = db_pool.get_tenant_graph(tenant_id)
         results = graph.ro_query(queries.GET_ALL_HOSTS_TOPOLOGY).result_set
@@ -200,12 +211,25 @@ async def get_network_topology(tenant_id: str):
 # ──────────────────────────────────────────────
 
 @router.post("/contain", response_model=ContainmentResponse)
-async def execute_containment(req: ContainmentRequest):
+async def execute_containment(
+    req: ContainmentRequest,
+    principal: SecurityPrincipal = Depends(require_permission("containment:execute")),
+):
     """
     Executes graph-level simulated host containment in FalkorDB.
     NOTE: Distinguishes graph simulation from physical hardware enforcement.
+    Disabled in production mode to prevent bypassing the guarded approval workflow.
     """
-    _verify_tenant(req.tenant_id)
+    if settings.is_production:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Legacy direct containment route is disabled in production mode. "
+                "Containment operations must follow the guarded 8-stage lifecycle via /api/v1/incident/propose -> review -> execute."
+            ),
+        )
+
+    enforce_tenant_context(req.tenant_id, principal)
     agent = MitigationAgent(tenant_id=req.tenant_id)
     result = agent.execute_containment(host_id=req.host_id)
 
@@ -231,9 +255,12 @@ async def execute_containment(req: ContainmentRequest):
 # ──────────────────────────────────────────────
 
 @router.post("/memory/finding", response_model=FindingResponse)
-async def persist_finding_memory(req: FindingRequest):
+async def persist_finding_memory(
+    req: FindingRequest,
+    principal: SecurityPrincipal = Depends(require_permission("memory:write")),
+):
     """Persist episodic agent finding as (:Finding)-[:ABOUT]->(:Host) subgraph (Track 2)."""
-    _verify_tenant(req.tenant_id)
+    enforce_tenant_context(req.tenant_id, principal)
     try:
         graph = db_pool.get_tenant_graph(req.tenant_id)
         result = graph.query(
@@ -258,9 +285,13 @@ async def persist_finding_memory(req: FindingRequest):
 # ──────────────────────────────────────────────
 
 @router.get("/oncall/{tenant_id}/{host_id}", response_model=List[OnCallEntry])
-async def get_oncall_owner(tenant_id: str, host_id: str):
+async def get_oncall_owner(
+    tenant_id: str,
+    host_id: str,
+    principal: SecurityPrincipal = Depends(get_current_principal),
+):
     """Resolve on-call incident responder for a compromised host (Track 3 Company Brain)."""
-    _verify_tenant(tenant_id)
+    enforce_tenant_context(tenant_id, principal)
     try:
         graph = db_pool.get_tenant_graph(tenant_id)
         results = graph.ro_query(queries.ONCALL_OWNER, {"host_id": host_id}).result_set
