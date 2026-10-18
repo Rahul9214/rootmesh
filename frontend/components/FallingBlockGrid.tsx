@@ -38,10 +38,22 @@ const badgeStyles: Record<ThreatNode["status"], string> = {
   SAFE:      "bg-emerald-500/20 text-emerald-300",
 };
 
+interface GridProposalState {
+  hostId: string;
+  hostName: string;
+  actionId: string;
+  incidentId: string;
+  lateralTargets: number;
+  maxEgressMbps: number;
+}
+
 export const FallingBlockGrid: React.FC = () => {
   const [nodes, setNodes] = useState<ThreatNode[]>(INITIAL_NODES);
   const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "offline">("connecting");
-  const [containingId, setContainingId] = useState<string | null>(null);
+  const [proposingId, setProposingId] = useState<string | null>(null);
+  const [pendingProposal, setPendingProposal] = useState<GridProposalState | null>(null);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [reviewFeedback, setReviewFeedback] = useState<string | null>(null);
 
   // Fetch live topology directly from FalkorDB on mount
   useEffect(() => {
@@ -57,29 +69,104 @@ export const FallingBlockGrid: React.FC = () => {
       });
   }, []);
 
-  // Execute real backend graph containment in FalkorDB
-  const handleContain = useCallback(async (id: string) => {
-    setContainingId(id);
+  // Step 1: Responder proposes containment (does NOT auto-approve)
+  const handleProposeContainment = useCallback(async (node: ThreatNode) => {
+    setProposingId(node.id);
+    setReviewFeedback(`Proposing containment for ${node.name}…`);
     try {
-      const res = await authenticatedFetch(`${API_BASE}/api/v1/threat/contain`, {
+      const propRes = await authenticatedFetch(`${API_BASE}/api/v1/incident/propose`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          incident_id: `inc-grid-${node.id}-${Date.now()}`,
+          target_host_id: node.id,
           tenant_id: TENANT_ID,
-          host_id: id,
+          justification: `Interactive Grid Containment: ${node.name} (${node.id})`,
         }),
       });
-      if (res.ok) {
-        setNodes((prev) =>
-          prev.map((n) => (n.id === id ? { ...n, status: "CONTAINED" } : n))
+
+      if (propRes.ok) {
+        const propData = await propRes.json();
+        setPendingProposal({
+          hostId: node.id,
+          hostName: node.name,
+          actionId: propData.action_id,
+          incidentId: propData.incident_id,
+          lateralTargets: propData.risk_assessment?.lateral_targets ?? 14,
+          maxEgressMbps: propData.risk_assessment?.max_egress_mbps ?? 43.0,
+        });
+        setReviewFeedback(`Proposal ${propData.action_id} generated. Awaiting authorized reviewer decision.`);
+      } else {
+        setReviewFeedback(`Proposal error: HTTP ${propRes.status}`);
+      }
+    } catch {
+      setReviewFeedback("Failed to reach RootMesh backend.");
+    } finally {
+      setProposingId(null);
+    }
+  }, []);
+
+  // Step 2: Explicit Reviewer Decision (Approve or Reject)
+  const handleReviewDecision = async (decision: "APPROVE" | "REJECT") => {
+    if (!pendingProposal) return;
+    setIsReviewing(true);
+
+    try {
+      const revRes = await authenticatedFetch(`${API_BASE}/api/v1/incident/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action_id: pendingProposal.actionId,
+          decision,
+          comment: decision === "APPROVE"
+            ? "Authorized review approval from Threat Command Center"
+            : "Reviewer rejected containment proposal (fail-closed)",
+        }),
+      });
+
+      if (!revRes.ok) {
+        setReviewFeedback(`Review rejected: HTTP ${revRes.status}`);
+        setIsReviewing(false);
+        return;
+      }
+
+      if (decision === "APPROVE") {
+        // Step 3: Execute approved proposal
+        const execRes = await authenticatedFetch(`${API_BASE}/api/v1/incident/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action_id: pendingProposal.actionId,
+            idempotency_key: `grid-${pendingProposal.hostId}-${Date.now()}`,
+          }),
+        });
+
+        if (execRes.ok) {
+          const auditData = await execRes.json();
+          const severed = auditData.before_after?.paths_severed ?? pendingProposal.lateralTargets;
+          const egress = auditData.before_after?.egress_reduction_mbps ?? pendingProposal.maxEgressMbps;
+          setNodes((prev) =>
+            prev.map((n) => (n.id === pendingProposal.hostId ? { ...n, status: "CONTAINED" } : n))
+          );
+          setReviewFeedback(
+            `✓ APPROVED & CONTAINED (${auditData.containment_type || "GRAPH_TOPOLOGY_SIMULATION"}) · Severed: ${severed} paths · Reduced Egress: ${egress} Mbps`
+          );
+        } else {
+          setReviewFeedback(`Execution failed: HTTP ${execRes.status}`);
+        }
+      } else {
+        // Decision was REJECT
+        setReviewFeedback(
+          `✕ REJECTED: Containment proposal ${pendingProposal.actionId} for ${pendingProposal.hostName} was rejected. Graph topology unchanged.`
         );
       }
     } catch {
-      // Keep state unchanged on failure
+      setReviewFeedback("Error communicating with incident response service.");
     } finally {
-      setContainingId(null);
+      setIsReviewing(false);
+      setPendingProposal(null);
     }
-  }, []);
+  };
 
   useEffect(() => {
     let ws: WebSocket;
@@ -98,7 +185,11 @@ export const FallingBlockGrid: React.FC = () => {
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.event === "ATTACK_PROPAGATION_COMPUTED") {
+            if (data.event === "INCIDENT_CONTAINMENT_EXECUTED" && data.target_host_id) {
+              setNodes((prev) =>
+                prev.map((n) => (n.id === data.target_host_id ? { ...n, status: "CONTAINED" } : n))
+              );
+            } else if (data.event === "ATTACK_PROPAGATION_COMPUTED") {
               setNodes((prev) =>
                 prev.map((n) =>
                   n.id !== data.patient_zero && n.status === "SAFE"
@@ -127,7 +218,7 @@ export const FallingBlockGrid: React.FC = () => {
   return (
     <div className="w-full rounded-2xl border border-indigo-900/40 bg-slate-950/80 backdrop-blur-md p-6 shadow-2xl">
       {/* Header */}
-      <div className="flex flex-wrap justify-between items-center mb-5 gap-3">
+      <div className="flex flex-wrap justify-between items-center mb-4 gap-3">
         <div>
           <h3 className="text-sm font-semibold text-violet-300 uppercase tracking-widest">
             Live Threat Propagation
@@ -140,9 +231,60 @@ export const FallingBlockGrid: React.FC = () => {
             {wsStatus === "live" ? "RESP Connected" : wsStatus === "connecting" ? "Connecting…" : "Reconnecting…"}
           </span>
           <span className="text-rose-400">⚠ {infected} Infected</span>
-          <span className="text-amber-400">🔒 {contained} Contained (Graph Sim)</span>
+          <span className="text-amber-400">🔒 {contained} Contained (GRAPH_TOPOLOGY_SIMULATION)</span>
         </div>
       </div>
+
+      {/* Review Banner if a Proposal is Pending */}
+      {pendingProposal && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-4 p-4 rounded-xl bg-slate-900 border border-amber-500/50 shadow-xl space-y-2 text-xs font-mono"
+        >
+          <div className="flex justify-between items-center">
+            <span className="font-bold text-amber-400">
+              🛡️ Containment Proposal Review Pending: {pendingProposal.actionId}
+            </span>
+            <span className="text-[10px] bg-amber-950/80 text-amber-300 px-2 py-0.5 rounded border border-amber-500/40">
+              Mode: GRAPH_TOPOLOGY_SIMULATION
+            </span>
+          </div>
+          <div className="text-slate-300 flex flex-wrap gap-4 text-[11px]">
+            <span>Target: <strong className="text-white">{pendingProposal.hostName} ({pendingProposal.hostId})</strong></span>
+            <span>Sever: <strong className="text-rose-400">{pendingProposal.lateralTargets} paths</strong></span>
+            <span>Egress: <strong className="text-amber-400">{pendingProposal.maxEgressMbps} Mbps</strong></span>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => handleReviewDecision("APPROVE")}
+              disabled={isReviewing}
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition-all disabled:opacity-50"
+            >
+              {isReviewing ? "Executing in Graph…" : "✓ Approve & Execute (Admin Role)"}
+            </button>
+            <button
+              onClick={() => handleReviewDecision("REJECT")}
+              disabled={isReviewing}
+              className="px-3 py-1.5 rounded-lg bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-700/50 font-semibold transition-all disabled:opacity-50"
+            >
+              ✕ Reject Proposal (Fail-Closed)
+            </button>
+            <button
+              onClick={() => setPendingProposal(null)}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 transition-all ml-auto"
+            >
+              Cancel
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      {reviewFeedback && (
+        <div className="text-[11px] text-violet-300 font-mono mb-3 bg-violet-950/30 px-3 py-1 rounded border border-violet-800/30">
+          {reviewFeedback}
+        </div>
+      )}
 
       {/* Block Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -170,11 +312,11 @@ export const FallingBlockGrid: React.FC = () => {
                 <span className="text-[10px] text-indigo-400 font-mono">Hop {node.hops}</span>
                 {node.status === "INFECTED" && (
                   <button
-                    onClick={() => handleContain(node.id)}
-                    disabled={containingId === node.id}
+                    onClick={() => handleProposeContainment(node)}
+                    disabled={proposingId === node.id || !!pendingProposal}
                     className="text-[9px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/40 transition-colors disabled:opacity-50"
                   >
-                    {containingId === node.id ? "Isolating…" : "Contain (Sim)"}
+                    {proposingId === node.id ? "Proposing…" : "Propose Contain"}
                   </button>
                 )}
               </div>

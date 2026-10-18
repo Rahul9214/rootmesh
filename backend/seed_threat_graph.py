@@ -89,14 +89,84 @@ CREATE (h5)-[:COMMUNICATES {bandwidth_mbps: 15}]->(h6)
 CREATE (h6)-[:COMMUNICATES {bandwidth_mbps: 19}]->(h7)
 CREATE (h6)-[:EXPOSED_TO   {bandwidth_mbps: 19}]->(h7)
 
-// Organizational Structure (Track 3 - Company Brain)
-CREATE (t1:Team {id: 'team-sec', name: 'SecOps Incident Response', slack_channel: '#secops-incidents'})
-CREATE (p1:Person {id: 'p-1', name: 'Alex Rivera', role: 'Lead Incident Responder',
-        email: 'alex.rivera@company.com', github_user: 'arivera'})
+// Organizational Structure & Company Brain (Track 3)
+// Explicitly labeled synthetic demonstration data for hackathon evaluation
+
+CREATE (t1:Team {id: 'team-sec', name: 'SecOps Incident Response', slack_channel: '#secops-incidents', pagerduty_service: 'PD-SECOPS-P1'})
+CREATE (t2:Team {id: 'team-infra', name: 'Platform Infrastructure Engineering', slack_channel: '#infra-alerts', pagerduty_service: 'PD-INFRA-TIER0'})
+CREATE (t3:Team {id: 'team-edge', name: 'Edge Ingress & Gateway Security', slack_channel: '#edge-team', pagerduty_service: 'PD-EDGE-TIER0'})
+
+CREATE (p1:Person {id: 'p-1', name: 'Alex Rivera', role: 'Lead Incident Responder', email: 'alex.rivera@rootmesh.local', github_user: 'arivera', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (p2:Person {id: 'p-2', name: 'Elena Rostova', role: 'Staff Platform Architect', email: 'elena.rostova@rootmesh.local', github_user: 'erostova', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (p3:Person {id: 'p-3', name: 'Marcus Chen', role: 'Edge Security Engineer', email: 'marcus.chen@rootmesh.local', github_user: 'mchen', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+
 CREATE (p1)-[:MEMBER_OF]->(t1)
+CREATE (p2)-[:MEMBER_OF]->(t2)
+CREATE (p3)-[:MEMBER_OF]->(t3)
+
 CREATE (p1)-[:ONCALL_FOR {schedule: '24x7-Primary', shift_start: '00:00', shift_end: '23:59'}]->(t1)
+CREATE (p2)-[:ONCALL_FOR {schedule: 'Infra-Primary', shift_start: '08:00', shift_end: '20:00'}]->(t2)
+CREATE (p3)-[:ONCALL_FOR {schedule: 'Edge-Primary', shift_start: '00:00', shift_end: '12:00'}]->(t3)
+
+// Services Running on Hosts
+CREATE (s0:Service {id: 'svc-endpoint-gw', name: 'Corporate Device Gateway', tier: 'Tier-1', repo: 'rootmesh/device-mgmt', environment: 'production', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (s1:Service {id: 'svc-app-core', name: 'Internal Application Core API', tier: 'Tier-0', repo: 'rootmesh/app-core', environment: 'production', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (s2:Service {id: 'svc-backup', name: 'Secure Backup & Archive Service', tier: 'Tier-1', repo: 'rootmesh/backup-archiver', environment: 'production', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (s3:Service {id: 'svc-network-mesh', name: 'VLAN Routing & SDN Core', tier: 'Tier-0', repo: 'rootmesh/sdn-mesh', environment: 'production', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (s4:Service {id: 'svc-bastion', name: 'Privileged Access Bastion', tier: 'Tier-0', repo: 'rootmesh/bastion-gateway', environment: 'production', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (s5:Service {id: 'svc-proxy', name: 'Reverse Proxy & TLS Ingress', tier: 'Tier-0', repo: 'rootmesh/edge-proxy', environment: 'production', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (s6:Service {id: 'svc-web-portal', name: 'Public Web Portal & Customer Gateway', tier: 'Tier-0', repo: 'rootmesh/customer-portal', environment: 'production', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (s7:Service {id: 'svc-perimeter-fw', name: 'Perimeter Egress Firewall Service', tier: 'Tier-0', repo: 'rootmesh/perimeter-defense', environment: 'production', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+
+// Host-Service mappings
+CREATE (h0)-[:RUNS_SERVICE]->(s0)
+CREATE (h1)-[:RUNS_SERVICE]->(s1)
+CREATE (h2)-[:RUNS_SERVICE]->(s2)
+CREATE (h3)-[:RUNS_SERVICE]->(s3)
+CREATE (h4)-[:RUNS_SERVICE]->(s4)
+CREATE (h5)-[:RUNS_SERVICE]->(s5)
+CREATE (h6)-[:RUNS_SERVICE]->(s6)
+CREATE (h7)-[:RUNS_SERVICE]->(s7)
+
+// Service Ownership
+CREATE (t1)-[:OWNS_SERVICE {sla_tier: 'CRITICAL'}]->(s0)
+CREATE (t2)-[:OWNS_SERVICE {sla_tier: 'CRITICAL'}]->(s1)
+CREATE (t2)-[:OWNS_SERVICE {sla_tier: 'HIGH'}]->(s2)
+CREATE (t2)-[:OWNS_SERVICE {sla_tier: 'CRITICAL'}]->(s3)
+CREATE (t2)-[:OWNS_SERVICE {sla_tier: 'CRITICAL'}]->(s4)
+CREATE (t3)-[:OWNS_SERVICE {sla_tier: 'CRITICAL'}]->(s5)
+CREATE (t3)-[:OWNS_SERVICE {sla_tier: 'CRITICAL'}]->(s6)
+CREATE (t1)-[:OWNS_SERVICE {sla_tier: 'CRITICAL'}]->(s7)
+
+// Direct Host Ownership (Preserving backward compatibility with Module 001/002 tests)
+CREATE (t1)-[:OWNS {sla_tier: 'CRITICAL'}]->(h0)
 CREATE (t1)-[:OWNS {sla_tier: 'CRITICAL'}]->(h1)
+CREATE (t2)-[:OWNS {sla_tier: 'HIGH'}]->(h2)
+CREATE (t2)-[:OWNS {sla_tier: 'CRITICAL'}]->(h3)
+CREATE (t2)-[:OWNS {sla_tier: 'CRITICAL'}]->(h4)
+CREATE (t3)-[:OWNS {sla_tier: 'CRITICAL'}]->(h5)
+CREATE (t3)-[:OWNS_SERVICE {sla_tier: 'CRITICAL'}]->(s5)
+CREATE (t3)-[:OWNS {sla_tier: 'CRITICAL'}]->(h6)
+CREATE (t1)-[:OWNS {sla_tier: 'CRITICAL'}]->(h7)
 CREATE (t1)-[:OWNS {sla_tier: 'HIGH'}]->(d1)
+CREATE (t1)-[:OWNS {sla_tier: 'CRITICAL'}]->(d2)
+
+// Runbooks linked to Services & Databases
+CREATE (rb0:Runbook {id: 'rb-iso-001', title: 'Workstation Lateral Movement Containment SOP', url: 'https://runbooks.internal/secops/rb-iso-001', steps_count: 5, sla_minutes: 15, data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (rb1:Runbook {id: 'rb-app-042', title: 'Tier-0 Internal App Server Compromise & Memory Forensics', url: 'https://runbooks.internal/infra/rb-app-042', steps_count: 7, sla_minutes: 30, data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (rb2:Runbook {id: 'rb-db-009', title: 'High-Value Database Exfiltration Mitigation & Token Revocation', url: 'https://runbooks.internal/secops/rb-db-009', steps_count: 6, sla_minutes: 10, data_classification: 'SYNTHETIC_DEMONSTRATION'})
+
+CREATE (s0)-[:HAS_RUNBOOK]->(rb0)
+CREATE (s1)-[:HAS_RUNBOOK]->(rb1)
+CREATE (d1)-[:HAS_RUNBOOK]->(rb2)
+CREATE (d2)-[:HAS_RUNBOOK]->(rb2)
+
+// Change Provenance (Git Commits) linked to Services
+CREATE (c0:Commit {sha: 'c89e1a4', author: 'arivera', message: 'feat(sec): deploy Zero-Trust SMB endpoint policy', timestamp: '2026-10-18T07:15:00Z', repo: 'rootmesh/device-mgmt', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+CREATE (c1:Commit {sha: 'b44f2d1', author: 'erostova', message: 'fix(core): patch Log4j runtime dependency to 2.17.1', timestamp: '2026-10-17T22:40:00Z', repo: 'rootmesh/app-core', data_classification: 'SYNTHETIC_DEMONSTRATION'})
+
+CREATE (s0)-[:HAS_CHANGE]->(c0)
+CREATE (s1)-[:HAS_CHANGE]->(c1)
 """
 
 graph.query(seed_query)
@@ -110,6 +180,11 @@ for idx_query in [
     "CREATE INDEX FOR (h:Host) ON (h.id)",
     "CREATE INDEX FOR (d:Database) ON (d.name)",
     "CREATE INDEX FOR (c:CVE) ON (c.id)",
+    "CREATE INDEX FOR (s:Service) ON (s.id)",
+    "CREATE INDEX FOR (t:Team) ON (t.id)",
+    "CREATE INDEX FOR (p:Person) ON (p.id)",
+    "CREATE INDEX FOR (r:Runbook) ON (r.id)",
+    "CREATE INDEX FOR (inc:Incident) ON (inc.id)",
 ]:
     try:
         graph.query(idx_query)
