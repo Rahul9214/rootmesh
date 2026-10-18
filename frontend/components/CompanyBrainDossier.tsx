@@ -189,6 +189,14 @@ export const CompanyBrainDossier: React.FC<CompanyBrainDossierProps> = ({
 
       {/* ── Tab 1: Factual Before/After Containment Evidence ──────────── */}
       {activeTab === "evidence" && (
+        !hasInvestigation ? (
+          <div className="p-8 rounded-xl bg-[#FAF7F2] border border-[#DFD6C9] text-xs font-mono text-[#645C64] text-center space-y-2">
+            <span className="text-[#82465D] font-bold text-sm block">Awaiting Autonomous Investigation</span>
+            <p className="text-[11px] text-[#928992] max-w-md mx-auto">
+              Execute a threat sweep in the Command Center to record live graph-derived lateral attack paths, database exposure vectors, and perimeter egress metrics.
+            </p>
+          </div>
+        ) : (
         <motion.div
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
@@ -356,6 +364,7 @@ export const CompanyBrainDossier: React.FC<CompanyBrainDossierProps> = ({
             <strong>Enforcement Note:</strong> Graph-level isolation verified in FalkorDB via Cypher re-analysis. Physical hardware firewall rule enforcement requires authorized appliance connector.
           </div>
         </motion.div>
+        )
       )}
 
       {/* ── Tab 2: Company Knowledge Graph ───────────────────────────── */}
