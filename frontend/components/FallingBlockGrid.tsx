@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { authenticatedFetch, getAuthenticatedWebSocketUrl } from "@/lib/auth";
 
 interface ThreatNode {
   id: string;
@@ -23,7 +24,6 @@ const INITIAL_NODES: ThreatNode[] = [
 ];
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000";
 const TENANT_ID = "sec_ops_tenant_alpha";
 
 const statusStyles: Record<ThreatNode["status"], string> = {
@@ -45,7 +45,7 @@ export const FallingBlockGrid: React.FC = () => {
 
   // Fetch live topology directly from FalkorDB on mount
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/threat/topology/${TENANT_ID}`)
+    authenticatedFetch(`${API_BASE}/api/v1/threat/topology/${TENANT_ID}`)
       .then((r) => r.ok ? r.json() : null)
       .then((data: ThreatNode[] | null) => {
         if (data && data.length > 0) {
@@ -61,7 +61,7 @@ export const FallingBlockGrid: React.FC = () => {
   const handleContain = useCallback(async (id: string) => {
     setContainingId(id);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/threat/contain`, {
+      const res = await authenticatedFetch(`${API_BASE}/api/v1/threat/contain`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -85,9 +85,10 @@ export const FallingBlockGrid: React.FC = () => {
     let ws: WebSocket;
     let retryTimer: ReturnType<typeof setTimeout>;
 
-    const connect = () => {
+    const connect = async () => {
       try {
-        ws = new WebSocket(`${WS_URL}/ws/threat-stream`);
+        const url = await getAuthenticatedWebSocketUrl("/ws/threat-stream", TENANT_ID);
+        ws = new WebSocket(url);
         ws.onopen = () => setWsStatus("live");
         ws.onclose = () => {
           setWsStatus("offline");

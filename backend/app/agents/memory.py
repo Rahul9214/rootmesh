@@ -107,3 +107,75 @@ class MemoryAgent:
             }
             for r in res
         ]
+
+    def persist_procedural_memory(
+        self,
+        host_id: str,
+        action_type: str,
+        outcome: str,
+        executed_by: str,
+        incident_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Records procedural mitigation memory as (:ProceduralMemory)-[:ABOUT]->(:Host) in FalkorDB (Track 2).
+        Provides verifiable historical trace of automated and guarded agent containment actions.
+        """
+        t0 = time.perf_counter()
+        graph = db_pool.get_tenant_graph(self.tenant_id)
+
+        cypher = """
+        MATCH (h:Host {id: $hid})
+        CREATE (p:ProceduralMemory {
+            id:          'proc-' + toString(timestamp()),
+            action_type: $action,
+            outcome:     $outcome,
+            executed_by: $executor,
+            incident_id: $iid,
+            at:          timestamp()
+        })
+        CREATE (p)-[:ABOUT]->(h)
+        RETURN p.id AS proc_id
+        """
+        res = graph.query(
+            cypher,
+            {
+                "hid": host_id,
+                "action": action_type,
+                "outcome": outcome,
+                "executor": executed_by,
+                "iid": incident_id,
+            },
+        ).result_set
+
+        proc_id = res[0][0] if res else "unknown"
+        exec_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return {
+            "proc_id": proc_id,
+            "host_id": host_id,
+            "action_type": action_type,
+            "outcome": outcome,
+            "tenant_id": self.tenant_id,
+            "execution_time_ms": exec_ms,
+        }
+
+    def recall_procedural_memory(self, host_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Recalls historical procedural actions taken on a host across prior incidents."""
+        graph = db_pool.get_tenant_graph(self.tenant_id)
+        cypher = """
+        MATCH (p:ProceduralMemory)-[:ABOUT]->(h:Host {id: $hid})
+        RETURN p.id, p.action_type, p.outcome, p.executed_by, p.incident_id, p.at
+        ORDER BY p.at DESC
+        LIMIT $limit
+        """
+        res = graph.ro_query(cypher, {"hid": host_id, "limit": limit}).result_set
+        return [
+            {
+                "proc_id": r[0],
+                "action_type": r[1],
+                "outcome": r[2],
+                "executed_by": r[3],
+                "incident_id": r[4],
+                "timestamp": r[5],
+            }
+            for r in res
+        ]

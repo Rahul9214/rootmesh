@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback } from "react";
 import { motion } from "framer-motion";
+import { authenticatedFetch } from "@/lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TENANT_ID = "sec_ops_tenant_alpha";
@@ -47,7 +48,7 @@ export const HeroSection: React.FC = () => {
     pushLine(`[Triage Agent] Initiating sweep from Patient Zero: ${input}…`);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/threat/traverse`, {
+      const res = await authenticatedFetch(`${API_BASE}/api/v1/threat/traverse`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
