@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { authenticatedFetch } from "@/lib/auth";
 
@@ -117,11 +117,23 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onInvestigationComplet
     []
   );
 
+  const inFlightRef = useRef(false);
+  const requestIdRef = useRef(0);
+  const onCompleteRef = useRef(onInvestigationComplete);
+
+  useEffect(() => {
+    onCompleteRef.current = onInvestigationComplete;
+  }, [onInvestigationComplete]);
+
   const runInvestigation = useCallback(async () => {
     const assetId = input.trim();
     if (!assetId) return;
 
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setLoading(true);
+
+    const thisRequestId = ++requestIdRef.current;
     addEvent("TriageAgent", `Initiating multi-hop traversal from Patient Zero: ${assetId}…`, "info");
 
     try {
@@ -140,6 +152,11 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onInvestigationComplet
       }
 
       const data = await res.json();
+
+      // Guard against stale async responses
+      if (thisRequestId !== requestIdRef.current) {
+        return;
+      }
 
       const invSummary: InvestigationSummary = {
         incident_id: data.incident_id,
@@ -160,7 +177,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onInvestigationComplet
       };
 
       setSummary(invSummary);
-      onInvestigationComplete?.(invSummary);
+      onCompleteRef.current?.(invSummary);
 
       const level =
         invSummary.target_count >= 10
@@ -224,17 +241,17 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onInvestigationComplet
         "success"
       );
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addEvent("SystemError", `Sweep failed: ${msg}. Check FalkorDB & FastAPI service.`, "critical");
+      if (thisRequestId === requestIdRef.current) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addEvent("SystemError", `Sweep failed: ${msg}. Check FalkorDB & FastAPI service.`, "critical");
+      }
     } finally {
-      setLoading(false);
+      if (thisRequestId === requestIdRef.current) {
+        inFlightRef.current = false;
+        setLoading(false);
+      }
     }
-  }, [input, addEvent, onInvestigationComplete]);
-
-  // Perform initial live investigation for default patient zero on mount
-  useEffect(() => {
-    runInvestigation();
-  }, [runInvestigation]);
+  }, [input, addEvent]);
 
   const currentLevel = THREAT_LEVELS[threatLevel] || THREAT_LEVELS.CRITICAL;
 

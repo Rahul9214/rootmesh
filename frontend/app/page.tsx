@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { HeroSection, type InvestigationSummary } from "@/components/HeroSection";
@@ -39,9 +39,9 @@ export default function HomePage() {
     egress_reduced_mbps: number;
   } | null>(null);
 
-  const handleInvestigationComplete = (summary: InvestigationSummary) => {
+  const handleInvestigationComplete = useCallback((summary: InvestigationSummary) => {
     setActiveInvestigation(summary);
-    const hostId = summary.patient_zero_id || selectedAssetId || "host-0";
+    const hostId = summary.patient_zero_id || "host-0";
     const hostName = summary.patient_zero_name || "Workstation-PatientZero";
     setSelectedAssetId(hostId);
     setActiveIncident({
@@ -52,13 +52,13 @@ export default function HomePage() {
     // Critical correctness check: reset containment state for newly investigated incident
     setIsContained(false);
     setContainmentAudit(null);
-  };
+  }, []);
 
-  const handleContainmentExecuted = (auditData: Record<string, unknown>) => {
+  const handleContainmentExecuted = useCallback((auditData: Record<string, unknown>) => {
     setIsContained(true);
     const beforeAfter = auditData.before_after as Record<string, unknown> | undefined;
-    const pathsSevered = typeof beforeAfter?.paths_severed === "number" ? beforeAfter.paths_severed : activeInvestigation?.target_count ?? 14;
-    const egressReduced = typeof beforeAfter?.egress_reduction_mbps === "number" ? beforeAfter.egress_reduction_mbps : activeInvestigation?.egress_risk_mbps ?? 43.0;
+    const pathsSevered = typeof beforeAfter?.paths_severed === "number" ? beforeAfter.paths_severed : 14;
+    const egressReduced = typeof beforeAfter?.egress_reduction_mbps === "number" ? beforeAfter.egress_reduction_mbps : 43.0;
 
     setContainmentAudit({
       audit_id: (auditData.audit_id as string) || `aud-${Date.now()}`,
@@ -69,21 +69,21 @@ export default function HomePage() {
       paths_severed: pathsSevered,
       egress_reduced_mbps: egressReduced,
     });
-  };
+  }, []);
 
-  const handleContainmentRejected = () => {
+  const handleContainmentRejected = useCallback(() => {
     setIsContained(false);
     setContainmentAudit(null);
-  };
+  }, []);
 
-  const handleAssetSelect = (id: string) => {
+  const handleAssetSelect = useCallback((id: string) => {
     setSelectedAssetId(id);
     setActiveIncident((prev) => ({
       ...prev,
       targetHostId: id,
       targetHost: `${id}`,
     }));
-  };
+  }, []);
 
   return (
     <main className="min-h-screen bg-[#FAF7F2] text-[#302B30] selection:bg-[#D26A50]/20 selection:text-[#302B30]">
