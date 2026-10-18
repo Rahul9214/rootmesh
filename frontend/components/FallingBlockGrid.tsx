@@ -26,18 +26,6 @@ const INITIAL_NODES: ThreatNode[] = [
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TENANT_ID = "sec_ops_tenant_alpha";
 
-const statusStyles: Record<ThreatNode["status"], string> = {
-  INFECTED:  "bg-rose-950/50  border-rose-500/80  shadow-[0_0_18px_rgba(244,63,94,0.4)]",
-  CONTAINED: "bg-amber-950/40 border-amber-500/70 shadow-[0_0_12px_rgba(255,184,0,0.3)]",
-  SAFE:      "bg-indigo-950/30 border-indigo-800/40 hover:border-violet-500/50",
-};
-
-const badgeStyles: Record<ThreatNode["status"], string> = {
-  INFECTED:  "bg-rose-500/20  text-rose-300  border border-rose-500/40",
-  CONTAINED: "bg-amber-500/20 text-amber-300 border border-amber-500/40",
-  SAFE:      "bg-emerald-500/20 text-emerald-300",
-};
-
 interface GridProposalState {
   hostId: string;
   hostName: string;
@@ -49,30 +37,30 @@ interface GridProposalState {
 
 export const FallingBlockGrid: React.FC = () => {
   const [nodes, setNodes] = useState<ThreatNode[]>(INITIAL_NODES);
+  const [selectedNode, setSelectedNode] = useState<ThreatNode | null>(null);
   const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "offline">("connecting");
   const [proposingId, setProposingId] = useState<string | null>(null);
   const [pendingProposal, setPendingProposal] = useState<GridProposalState | null>(null);
   const [isReviewing, setIsReviewing] = useState(false);
-  const [reviewFeedback, setReviewFeedback] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
   // Fetch live topology directly from FalkorDB on mount
   useEffect(() => {
     authenticatedFetch(`${API_BASE}/api/v1/threat/topology/${TENANT_ID}`)
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => (r.ok ? r.json() : null))
       .then((data: ThreatNode[] | null) => {
         if (data && data.length > 0) {
           setNodes(data);
         }
       })
-      .catch(() => {
-        // Fall back to INITIAL_NODES if offline
-      });
+      .catch(() => {});
   }, []);
 
-  // Step 1: Responder proposes containment (does NOT auto-approve)
+  // Propose containment (Responder role - never auto-approves)
   const handleProposeContainment = useCallback(async (node: ThreatNode) => {
     setProposingId(node.id);
-    setReviewFeedback(`Proposing containment for ${node.name}…`);
+    setFeedback(`Generating containment proposal for ${node.name}…`);
+
     try {
       const propRes = await authenticatedFetch(`${API_BASE}/api/v1/incident/propose`, {
         method: "POST",
@@ -81,7 +69,7 @@ export const FallingBlockGrid: React.FC = () => {
           incident_id: `inc-grid-${node.id}-${Date.now()}`,
           target_host_id: node.id,
           tenant_id: TENANT_ID,
-          justification: `Interactive Grid Containment: ${node.name} (${node.id})`,
+          justification: `Interactive Attack Grid Containment: ${node.name} (${node.id})`,
         }),
       });
 
@@ -95,18 +83,18 @@ export const FallingBlockGrid: React.FC = () => {
           lateralTargets: propData.risk_assessment?.lateral_targets ?? 14,
           maxEgressMbps: propData.risk_assessment?.max_egress_mbps ?? 43.0,
         });
-        setReviewFeedback(`Proposal ${propData.action_id} generated. Awaiting authorized reviewer decision.`);
+        setFeedback(`Proposal ${propData.action_id} created. Awaiting authorized reviewer decision.`);
       } else {
-        setReviewFeedback(`Proposal error: HTTP ${propRes.status}`);
+        setFeedback(`Proposal error: HTTP ${propRes.status}`);
       }
     } catch {
-      setReviewFeedback("Failed to reach RootMesh backend.");
+      setFeedback("Failed to reach RootMesh backend service.");
     } finally {
       setProposingId(null);
     }
   }, []);
 
-  // Step 2: Explicit Reviewer Decision (Approve or Reject)
+  // Explicit Human Review Decision
   const handleReviewDecision = async (decision: "APPROVE" | "REJECT") => {
     if (!pendingProposal) return;
     setIsReviewing(true);
@@ -118,20 +106,20 @@ export const FallingBlockGrid: React.FC = () => {
         body: JSON.stringify({
           action_id: pendingProposal.actionId,
           decision,
-          comment: decision === "APPROVE"
-            ? "Authorized review approval from Threat Command Center"
-            : "Reviewer rejected containment proposal (fail-closed)",
+          comment:
+            decision === "APPROVE"
+              ? "Authorized review approval from Threat Propagation Grid"
+              : "Reviewer rejected containment proposal (fail-closed)",
         }),
       });
 
       if (!revRes.ok) {
-        setReviewFeedback(`Review rejected: HTTP ${revRes.status}`);
+        setFeedback(`Review rejected: HTTP ${revRes.status}`);
         setIsReviewing(false);
         return;
       }
 
       if (decision === "APPROVE") {
-        // Step 3: Execute approved proposal
         const execRes = await authenticatedFetch(`${API_BASE}/api/v1/incident/execute`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -145,29 +133,30 @@ export const FallingBlockGrid: React.FC = () => {
           const auditData = await execRes.json();
           const severed = auditData.before_after?.paths_severed ?? pendingProposal.lateralTargets;
           const egress = auditData.before_after?.egress_reduction_mbps ?? pendingProposal.maxEgressMbps;
+
           setNodes((prev) =>
             prev.map((n) => (n.id === pendingProposal.hostId ? { ...n, status: "CONTAINED" } : n))
           );
-          setReviewFeedback(
+          setFeedback(
             `✓ APPROVED & CONTAINED (${auditData.containment_type || "GRAPH_TOPOLOGY_SIMULATION"}) · Severed: ${severed} paths · Reduced Egress: ${egress} Mbps`
           );
         } else {
-          setReviewFeedback(`Execution failed: HTTP ${execRes.status}`);
+          setFeedback(`Execution failed: HTTP ${execRes.status}`);
         }
       } else {
-        // Decision was REJECT
-        setReviewFeedback(
+        setFeedback(
           `✕ REJECTED: Containment proposal ${pendingProposal.actionId} for ${pendingProposal.hostName} was rejected. Graph topology unchanged.`
         );
       }
     } catch {
-      setReviewFeedback("Error communicating with incident response service.");
+      setFeedback("Error communicating with incident response service.");
     } finally {
       setIsReviewing(false);
       setPendingProposal(null);
     }
   };
 
+  // WebSocket synchronization
   useEffect(() => {
     let ws: WebSocket;
     let retryTimer: ReturnType<typeof setTimeout>;
@@ -214,116 +203,224 @@ export const FallingBlockGrid: React.FC = () => {
 
   const infected = nodes.filter((n) => n.status === "INFECTED").length;
   const contained = nodes.filter((n) => n.status === "CONTAINED").length;
+  const safe = nodes.filter((n) => n.status === "SAFE").length;
 
   return (
-    <div className="w-full rounded-2xl border border-indigo-900/40 bg-slate-950/80 backdrop-blur-md p-6 shadow-2xl">
-      {/* Header */}
-      <div className="flex flex-wrap justify-between items-center mb-4 gap-3">
+    <div className="w-full rounded-2xl bg-[#FFFFFF] border border-[#DFD6C9] p-6 shadow-warm-sm space-y-4">
+      {/* ── Section Header ────────────────────────────────────────────── */}
+      <div className="flex flex-wrap justify-between items-center gap-3 border-b border-[#EEE6DC] pb-4">
         <div>
-          <h3 className="text-sm font-semibold text-violet-300 uppercase tracking-widest">
-            Live Threat Propagation
-          </h3>
-          <p className="text-xs text-slate-500 mt-0.5">FalkorDB GraphBLAS Real-Time Traversal</p>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#D26A50]" />
+            <h3 className="text-sm font-bold text-[#302B30] uppercase tracking-wider font-mono">
+              Live Threat Propagation Matrix
+            </h3>
+          </div>
+          <p className="text-xs text-[#645C64] mt-0.5">
+            Real-time FalkorDB graph-derived asset status & lateral blast radius
+          </p>
         </div>
-        <div className="flex items-center gap-4 text-xs font-mono">
-          <span className={`flex items-center gap-1.5 ${wsStatus === "live" ? "text-emerald-400" : wsStatus === "connecting" ? "text-amber-400" : "text-rose-400"}`}>
-            <span className={`w-2 h-2 rounded-full ${wsStatus === "live" ? "bg-emerald-500 animate-ping" : wsStatus === "connecting" ? "bg-amber-400 animate-pulse" : "bg-rose-500"}`} />
-            {wsStatus === "live" ? "RESP Connected" : wsStatus === "connecting" ? "Connecting…" : "Reconnecting…"}
+
+        <div className="flex items-center gap-2.5 text-xs font-mono">
+          <span
+            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border ${
+              wsStatus === "live"
+                ? "bg-[#E8F2EC] text-[#26694E] border-[#C5DFD0]"
+                : wsStatus === "connecting"
+                ? "bg-[#FDF5E8] text-[#A06316] border-[#F4DCB6]"
+                : "bg-[#FBF0ED] text-[#C24128] border-[#F3C4B8]"
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                wsStatus === "live" ? "bg-[#26694E] animate-pulse" : "bg-[#C24128]"
+              }`}
+            />
+            <span>{wsStatus === "live" ? "RESP Live" : "Syncing"}</span>
           </span>
-          <span className="text-rose-400">⚠ {infected} Infected</span>
-          <span className="text-amber-400">🔒 {contained} Contained (GRAPH_TOPOLOGY_SIMULATION)</span>
+
+          <span className="text-[#C24128] font-bold">⚠ {infected} Infected</span>
+          <span className="text-[#82465D] font-bold">🔒 {contained} Contained</span>
+          <span className="text-[#26694E] font-medium hidden sm:inline">✓ {safe} Safe</span>
         </div>
       </div>
 
-      {/* Review Banner if a Proposal is Pending */}
+      {/* ── Guarded Review Authorization Banner ──────────────────────── */}
       {pendingProposal && (
         <motion.div
-          initial={{ opacity: 0, y: -10 }}
+          initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
-          className="mb-4 p-4 rounded-xl bg-slate-900 border border-amber-500/50 shadow-xl space-y-2 text-xs font-mono"
+          className="p-4 rounded-xl bg-[#FDF5E8] border border-[#E6A548] shadow-warm-sm space-y-2.5"
         >
-          <div className="flex justify-between items-center">
-            <span className="font-bold text-amber-400">
-              🛡️ Containment Proposal Review Pending: {pendingProposal.actionId}
-            </span>
-            <span className="text-[10px] bg-amber-950/80 text-amber-300 px-2 py-0.5 rounded border border-amber-500/40">
-              Mode: GRAPH_TOPOLOGY_SIMULATION
+          <div className="flex flex-wrap justify-between items-center gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm">🛡️</span>
+              <span className="text-xs font-bold font-mono text-[#302B30] uppercase">
+                Containment Authorization Required
+              </span>
+            </div>
+            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-[#FAF7F2] text-[#82465D] border border-[#DFD6C9]">
+              GRAPH_TOPOLOGY_SIMULATION
             </span>
           </div>
-          <div className="text-slate-300 flex flex-wrap gap-4 text-[11px]">
-            <span>Target: <strong className="text-white">{pendingProposal.hostName} ({pendingProposal.hostId})</strong></span>
-            <span>Sever: <strong className="text-rose-400">{pendingProposal.lateralTargets} paths</strong></span>
-            <span>Egress: <strong className="text-amber-400">{pendingProposal.maxEgressMbps} Mbps</strong></span>
+
+          <div className="text-xs font-mono text-[#645C64] flex flex-wrap gap-x-4 gap-y-1">
+            <span>
+              Target: <strong className="text-[#302B30]">{pendingProposal.hostName} ({pendingProposal.hostId})</strong>
+            </span>
+            <span>
+              Action: <strong className="text-[#82465D]">{pendingProposal.actionId}</strong>
+            </span>
+            <span>
+              Paths Severed: <strong className="text-[#C24128]">{pendingProposal.lateralTargets}</strong>
+            </span>
+            <span>
+              Egress Cut: <strong className="text-[#A06316]">{pendingProposal.maxEgressMbps} Mbps</strong>
+            </span>
           </div>
-          <div className="flex gap-2 pt-1">
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
             <button
               onClick={() => handleReviewDecision("APPROVE")}
               disabled={isReviewing}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition-all disabled:opacity-50"
+              className="px-3.5 py-1.5 rounded-lg bg-[#26694E] hover:bg-[#1E543E] text-white font-semibold text-xs transition-all shadow-warm-xs disabled:opacity-50"
             >
-              {isReviewing ? "Executing in Graph…" : "✓ Approve & Execute (Admin Role)"}
+              {isReviewing ? "Executing in FalkorDB…" : "✓ Approve & Execute (Admin Role)"}
             </button>
             <button
               onClick={() => handleReviewDecision("REJECT")}
               disabled={isReviewing}
-              className="px-3 py-1.5 rounded-lg bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-700/50 font-semibold transition-all disabled:opacity-50"
+              className="px-3.5 py-1.5 rounded-lg bg-[#C24128] hover:bg-[#A3351F] text-white font-semibold text-xs transition-all shadow-warm-xs disabled:opacity-50"
             >
-              ✕ Reject Proposal (Fail-Closed)
+              ✕ Reject Proposal
             </button>
             <button
               onClick={() => setPendingProposal(null)}
-              className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 transition-all ml-auto"
+              className="px-2.5 py-1.5 rounded-lg bg-[#FAF7F2] hover:bg-[#EEE6DC] text-[#645C64] text-xs font-mono border border-[#DFD6C9] ml-auto"
             >
-              Cancel
+              Dismiss
             </button>
           </div>
         </motion.div>
       )}
 
-      {reviewFeedback && (
-        <div className="text-[11px] text-violet-300 font-mono mb-3 bg-violet-950/30 px-3 py-1 rounded border border-violet-800/30">
-          {reviewFeedback}
+      {/* Action Feedback */}
+      {feedback && (
+        <div className="text-[11px] font-mono text-[#302B30] bg-[#F5EFE6] px-3.5 py-2 rounded-xl border border-[#DFD6C9]">
+          {feedback}
         </div>
       )}
 
-      {/* Block Grid */}
+      {/* ── Animated Matrix Grid ──────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
         <AnimatePresence>
-          {nodes.map((node, index) => (
-            <motion.div
-              key={node.id}
-              initial={{ y: -80, opacity: 0, scale: 0.75 }}
-              animate={{ y: 0, opacity: 1, scale: 1 }}
-              exit={{ y: 80, opacity: 0 }}
-              transition={{ duration: 0.55, delay: index * 0.08, type: "spring", stiffness: 140 }}
-              className={`relative p-4 rounded-xl border backdrop-blur-md flex flex-col justify-between h-32 transition-colors duration-500 ${statusStyles[node.status]}`}
-            >
-              <div className="flex justify-between items-start">
-                <span className="text-[10px] font-mono text-slate-500">{node.id}</span>
-                <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${badgeStyles[node.status]}`}>
-                  {node.status === "CONTAINED" ? "CONTAINED (SIM)" : node.status}
-                </span>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-slate-100 leading-tight mt-1">{node.name}</p>
-                <p className="text-[10px] text-slate-500 font-mono">{node.ip}</p>
-              </div>
-              <div className="flex justify-between items-center mt-2">
-                <span className="text-[10px] text-indigo-400 font-mono">Hop {node.hops}</span>
-                {node.status === "INFECTED" && (
-                  <button
-                    onClick={() => handleProposeContainment(node)}
-                    disabled={proposingId === node.id || !!pendingProposal}
-                    className="text-[9px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/40 transition-colors disabled:opacity-50"
-                  >
-                    {proposingId === node.id ? "Proposing…" : "Propose Contain"}
-                  </button>
-                )}
-              </div>
-            </motion.div>
-          ))}
+          {nodes.map((node, index) => {
+            const isSelected = selectedNode?.id === node.id;
+
+            const cardStyle =
+              node.status === "INFECTED"
+                ? "bg-[#FBF0ED] border-[#F3C4B8] hover:border-[#D26A50]"
+                : node.status === "CONTAINED"
+                ? "bg-[#F6EDF1] border-[#E5CDD8] hover:border-[#82465D]"
+                : "bg-[#FFFFFF] border-[#DFD6C9] hover:border-[#C8BEB0]";
+
+            const badgeStyle =
+              node.status === "INFECTED"
+                ? "bg-[#F3C4B8] text-[#C24128]"
+                : node.status === "CONTAINED"
+                ? "bg-[#E5CDD8] text-[#82465D]"
+                : "bg-[#E8F2EC] text-[#26694E]";
+
+            return (
+              <motion.div
+                key={node.id}
+                initial={{ opacity: 0, y: -16, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.92 }}
+                transition={{ duration: 0.35, delay: index * 0.03, type: "spring", stiffness: 180 }}
+                onClick={() => setSelectedNode(node)}
+                tabIndex={0}
+                role="button"
+                aria-label={`Node ${node.name}, status ${node.status}`}
+                onKeyDown={(e) => e.key === "Enter" && setSelectedNode(node)}
+                className={`relative p-3.5 rounded-xl border flex flex-col justify-between h-32 cursor-pointer transition-all focus:outline-none focus:ring-2 focus:ring-[#D26A50] shadow-warm-xs interactive-lift ${cardStyle} ${
+                  isSelected ? "ring-2 ring-[#D26A50] shadow-warm-md" : ""
+                }`}
+              >
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] font-mono text-[#645C64] font-medium">
+                    {node.id}
+                  </span>
+                  <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${badgeStyle}`}>
+                    {node.status === "CONTAINED" ? "CONTAINED (SIM)" : node.status}
+                  </span>
+                </div>
+
+                <div>
+                  <p className="text-xs font-bold text-[#302B30] leading-tight truncate">
+                    {node.name}
+                  </p>
+                  <p className="text-[10px] text-[#645C64] font-mono mt-0.5">
+                    {node.ip}
+                  </p>
+                </div>
+
+                <div className="flex justify-between items-center pt-1 border-t border-black/5">
+                  <span className="text-[10px] text-[#645C64] font-mono">
+                    Hop {node.hops}
+                  </span>
+                  {node.status === "INFECTED" && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleProposeContainment(node);
+                      }}
+                      disabled={proposingId === node.id || !!pendingProposal}
+                      className="text-[10px] px-2 py-0.5 rounded-md bg-[#D26A50] hover:bg-[#BE5B42] text-white font-medium shadow-warm-xs transition-colors disabled:opacity-50"
+                    >
+                      {proposingId === node.id ? "Proposing…" : "Contain (Sim)"}
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            );
+          })}
         </AnimatePresence>
       </div>
+
+      {/* ── Slide-Out Node Inspector Drawer ───────────────────────────── */}
+      {selectedNode && (
+        <div className="p-4 rounded-xl bg-[#F5EFE6] border border-[#DFD6C9] flex flex-wrap items-center justify-between gap-3 text-xs font-mono shadow-warm-xs">
+          <div className="flex items-center gap-3">
+            <span className="text-lg">🔎</span>
+            <div>
+              <span className="font-bold text-[#302B30] text-sm">{selectedNode.name}</span>{" "}
+              <span className="text-[#645C64]">({selectedNode.id} · {selectedNode.ip})</span>
+              <div className="text-[11px] text-[#645C64] mt-0.5">
+                Current Status: <strong className={selectedNode.status === "INFECTED" ? "text-[#C24128]" : selectedNode.status === "CONTAINED" ? "text-[#82465D]" : "text-[#26694E]"}>{selectedNode.status}</strong> · Propagation Distance: <strong>{selectedNode.hops === 0 ? "Patient Zero (Infected Origin Host)" : `${selectedNode.hops} hop${selectedNode.hops === 1 ? "" : "s"} from patient zero`}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {selectedNode.status === "INFECTED" && (
+              <button
+                onClick={() => handleProposeContainment(selectedNode)}
+                disabled={proposingId === selectedNode.id || !!pendingProposal}
+                className="px-3.5 py-1.5 rounded-lg bg-[#D26A50] hover:bg-[#BE5B42] text-white font-semibold text-xs shadow-warm-xs transition-colors disabled:opacity-50"
+              >
+                Propose Containment (Sim)
+              </button>
+            )}
+            <button
+              onClick={() => setSelectedNode(null)}
+              className="px-3 py-1.5 rounded-lg bg-[#FFFFFF] text-[#645C64] border border-[#DFD6C9] hover:bg-[#EEE6DC] transition-colors font-medium"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

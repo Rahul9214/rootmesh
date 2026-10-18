@@ -168,7 +168,12 @@ MATCH (source:Host {id: $source_id}), (db:Database {id: $db_id})
 MATCH (db)-[:STORED_ON]->(storage_host:Host)
 WITH source, storage_host, db, shortestPath((source)-[:COMMUNICATES|EXPOSED_TO*]->(storage_host)) AS path
 RETURN db.id AS db_id, db.name AS db_name, db.classification AS classification,
-       [n IN nodes(path) | n.name] AS path_to_host, length(path) AS distance
+       CASE WHEN source.id = storage_host.id THEN [source.name]
+            WHEN path IS NOT NULL THEN [n IN nodes(path) | n.name]
+            ELSE [] END AS path_to_host,
+       CASE WHEN source.id = storage_host.id THEN 0
+            WHEN path IS NOT NULL THEN length(path)
+            ELSE null END AS distance
 LIMIT 1
 """
 

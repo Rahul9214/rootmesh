@@ -17,11 +17,15 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "RootMesh — Autonomous Threat Memory & Incident Response Engine",
   description:
-    "Sub-millisecond threat propagation calculation, multi-hop path reasoning, and persistent agent incident memory powered by FalkorDB GraphBLAS.",
-  keywords: ["cybersecurity", "RootMesh", "FalkorDB", "GraphBLAS", "incident response", "graph AI"],
+    "FalkorDB GraphBLAS-powered cybersecurity incident investigation, attack-path traversal, and persistent memory platform.",
+  icons: {
+    icon: "/brand/rootmesh-icon.png",
+    shortcut: "/brand/rootmesh-icon.png",
+    apple: "/brand/rootmesh-icon.png",
+  },
   openGraph: {
-    title: "RootMesh",
-    description: "FalkorDB-powered autonomous cybersecurity incident response and threat memory engine.",
+    title: "RootMesh — Threat Intelligence & Incident Response",
+    description: "Graph-native cybersecurity incident investigation and response engine powered by FalkorDB.",
     type: "website",
   },
 };
@@ -33,7 +37,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
-      <body className="bg-[#0B0D12] text-slate-200 antialiased min-h-screen font-sans">
+      <body className="bg-[#FAF7F2] text-[#302B30] antialiased min-h-screen font-sans selection:bg-[#D26A50]/20 selection:text-[#302B30]">
         {children}
       </body>
     </html>
