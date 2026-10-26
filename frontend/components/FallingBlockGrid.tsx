@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { authenticatedFetch, getAuthenticatedWebSocketUrl } from "@/lib/auth";
+import { authenticatedFetch } from "@/lib/auth";
+import { threatStream, type ThreatStreamEvent } from "@/lib/threatStream";
 
 interface ThreatNode {
   id: string;
@@ -24,7 +25,6 @@ const INITIAL_NODES: ThreatNode[] = [
 ];
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const TENANT_ID = "sec_ops_tenant_alpha";
 
 interface GridProposalState {
   hostId: string;
@@ -35,7 +35,29 @@ interface GridProposalState {
   maxEgressMbps: number;
 }
 
-export const FallingBlockGrid: React.FC = () => {
+export interface FallingBlockGridProps {
+  tenantId?: string;
+  activeTargetHostId?: string;
+  activeIncidentId?: string;
+  isContained?: boolean;
+  onProposalCreated?: (proposal: Record<string, unknown>) => void;
+  onProposalReviewed?: (decision: "APPROVE" | "REJECT", proposal: Record<string, unknown>) => void;
+  onExecutionStarted?: (actionId: string) => void;
+  onExecutionFailed?: (error: string) => void;
+  onContainmentExecuted?: (auditData: Record<string, unknown>) => void;
+}
+
+export const FallingBlockGrid: React.FC<FallingBlockGridProps> = ({
+  tenantId,
+  activeTargetHostId,
+  activeIncidentId,
+  isContained = false,
+  onProposalCreated,
+  onProposalReviewed,
+  onExecutionStarted,
+  onExecutionFailed,
+  onContainmentExecuted,
+}) => {
   const [nodes, setNodes] = useState<ThreatNode[]>(INITIAL_NODES);
   const [selectedNode, setSelectedNode] = useState<ThreatNode | null>(null);
   const [wsStatus, setWsStatus] = useState<"connecting" | "live" | "offline">("connecting");
@@ -44,9 +66,13 @@ export const FallingBlockGrid: React.FC = () => {
   const [isReviewing, setIsReviewing] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  // Fetch live topology directly from FalkorDB on mount
+  // Fetch live topology directly from FalkorDB on mount or tenant change
   useEffect(() => {
-    authenticatedFetch(`${API_BASE}/api/v1/threat/topology/${TENANT_ID}`)
+    if (!tenantId) {
+      setNodes(INITIAL_NODES);
+      return;
+    }
+    authenticatedFetch(`${API_BASE}/api/v1/threat/topology/${tenantId}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data: ThreatNode[] | null) => {
         if (data && data.length > 0) {
@@ -54,45 +80,77 @@ export const FallingBlockGrid: React.FC = () => {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [tenantId]);
 
-  // Propose containment (Responder role - never auto-approves)
-  const handleProposeContainment = useCallback(async (node: ThreatNode) => {
-    setProposingId(node.id);
-    setFeedback(`Generating containment proposal for ${node.name}…`);
-
-    try {
-      const propRes = await authenticatedFetch(`${API_BASE}/api/v1/incident/propose`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          incident_id: `inc-grid-${node.id}-${Date.now()}`,
-          target_host_id: node.id,
-          tenant_id: TENANT_ID,
-          justification: `Interactive Attack Grid Containment: ${node.name} (${node.id})`,
-        }),
-      });
-
-      if (propRes.ok) {
-        const propData = await propRes.json();
-        setPendingProposal({
-          hostId: node.id,
-          hostName: node.name,
-          actionId: propData.action_id,
-          incidentId: propData.incident_id,
-          lateralTargets: propData.risk_assessment?.lateral_targets ?? 14,
-          maxEgressMbps: propData.risk_assessment?.max_egress_mbps ?? 43.0,
-        });
-        setFeedback(`Proposal ${propData.action_id} created. Awaiting authorized reviewer decision.`);
-      } else {
-        setFeedback(`Proposal error: HTTP ${propRes.status}`);
+  // Propose containment (Responder role - requires verified persisted incident)
+  const handleProposeContainment = useCallback(
+    async (node: ThreatNode) => {
+      if (!tenantId) {
+        setFeedback("Authorization required: No active tenant context.");
+        return;
       }
-    } catch {
-      setFeedback("Failed to reach RootMesh backend service.");
-    } finally {
-      setProposingId(null);
-    }
-  }, []);
+
+      // Preserve Human-in-the-Loop & verified incident constraint
+      const effectiveIncidentId =
+        node.id === activeTargetHostId &&
+        activeIncidentId &&
+        activeIncidentId.startsWith("inc-") &&
+        activeIncidentId !== "inc-latest"
+          ? activeIncidentId
+          : null;
+
+      if (!effectiveIncidentId) {
+        setFeedback(
+          `Cannot propose containment for ${node.name} (${node.id}): A verified, persisted incident is required. Please run an investigation first.`
+        );
+        return;
+      }
+
+      setProposingId(node.id);
+      setFeedback(`Generating containment proposal for ${node.name}…`);
+
+      try {
+        const propRes = await authenticatedFetch(`${API_BASE}/api/v1/incident/propose`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            incident_id: effectiveIncidentId,
+            target_host_id: node.id,
+            tenant_id: tenantId,
+            justification: `Interactive Attack Grid Containment: ${node.name} (${node.id})`,
+          }),
+        });
+
+        if (propRes.ok) {
+          const propData = await propRes.json();
+          setPendingProposal({
+            hostId: node.id,
+            hostName: node.name,
+            actionId: propData.action_id,
+            incidentId: propData.incident_id,
+            lateralTargets:
+              typeof propData.risk_assessment?.lateral_targets === "number"
+                ? propData.risk_assessment.lateral_targets
+                : 0,
+            maxEgressMbps:
+              typeof propData.risk_assessment?.max_egress_mbps === "number"
+                ? propData.risk_assessment.max_egress_mbps
+                : 0,
+          });
+          onProposalCreated?.(propData);
+          setFeedback(`Proposal ${propData.action_id} created. Awaiting authorized reviewer decision.`);
+        } else {
+          const errJson = await propRes.json().catch(() => ({}));
+          setFeedback(`Proposal error: ${errJson.detail || `HTTP ${propRes.status}`}`);
+        }
+      } catch {
+        setFeedback("Failed to reach RootMesh backend service.");
+      } finally {
+        setProposingId(null);
+      }
+    },
+    [tenantId, activeTargetHostId, activeIncidentId, onProposalCreated]
+  );
 
   // Explicit Human Review Decision
   const handleReviewDecision = async (decision: "APPROVE" | "REJECT") => {
@@ -114,12 +172,17 @@ export const FallingBlockGrid: React.FC = () => {
       });
 
       if (!revRes.ok) {
-        setFeedback(`Review rejected: HTTP ${revRes.status}`);
+        const errJson = await revRes.json().catch(() => ({}));
+        setFeedback(`Review rejected: ${errJson.detail || `HTTP ${revRes.status}`}`);
         setIsReviewing(false);
         return;
       }
 
+      const revData = await revRes.json().catch(() => ({}));
+      onProposalReviewed?.(decision, revData);
+
       if (decision === "APPROVE") {
+        onExecutionStarted?.(pendingProposal.actionId);
         const execRes = await authenticatedFetch(`${API_BASE}/api/v1/incident/execute`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -131,8 +194,14 @@ export const FallingBlockGrid: React.FC = () => {
 
         if (execRes.ok) {
           const auditData = await execRes.json();
-          const severed = auditData.before_after?.paths_severed ?? pendingProposal.lateralTargets;
-          const egress = auditData.before_after?.egress_reduction_mbps ?? pendingProposal.maxEgressMbps;
+          const severed =
+            auditData.before_after?.paths_severed !== undefined
+              ? auditData.before_after.paths_severed
+              : pendingProposal.lateralTargets;
+          const egress =
+            auditData.before_after?.egress_reduction_mbps !== undefined
+              ? auditData.before_after.egress_reduction_mbps
+              : pendingProposal.maxEgressMbps;
 
           setNodes((prev) =>
             prev.map((n) => (n.id === pendingProposal.hostId ? { ...n, status: "CONTAINED" } : n))
@@ -140,8 +209,12 @@ export const FallingBlockGrid: React.FC = () => {
           setFeedback(
             `✓ APPROVED & CONTAINED (${auditData.containment_type || "GRAPH_TOPOLOGY_SIMULATION"}) · Severed: ${severed} paths · Reduced Egress: ${egress} Mbps`
           );
+          onContainmentExecuted?.(auditData);
         } else {
-          setFeedback(`Execution failed: HTTP ${execRes.status}`);
+          const errJson = await execRes.json().catch(() => ({}));
+          const errDetail = errJson.detail || `HTTP ${execRes.status}`;
+          setFeedback(`Execution failed: ${errDetail}`);
+          onExecutionFailed?.(errDetail);
         }
       } else {
         setFeedback(
@@ -150,63 +223,62 @@ export const FallingBlockGrid: React.FC = () => {
       }
     } catch {
       setFeedback("Error communicating with incident response service.");
+      onExecutionFailed?.("Error communicating with incident response service.");
     } finally {
       setIsReviewing(false);
       setPendingProposal(null);
     }
   };
 
-  // WebSocket synchronization
+  // Synchronize with shared authoritative threat stream
   useEffect(() => {
-    let ws: WebSocket;
-    let retryTimer: ReturnType<typeof setTimeout>;
+    if (!tenantId) {
+      setWsStatus("offline");
+      return;
+    }
 
-    const connect = async () => {
-      try {
-        const url = await getAuthenticatedWebSocketUrl("/ws/threat-stream", TENANT_ID);
-        ws = new WebSocket(url);
-        ws.onopen = () => setWsStatus("live");
-        ws.onclose = () => {
-          setWsStatus("offline");
-          retryTimer = setTimeout(connect, 3000);
-        };
-        ws.onerror = () => setWsStatus("offline");
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.event === "INCIDENT_CONTAINMENT_EXECUTED" && data.target_host_id) {
-              setNodes((prev) =>
-                prev.map((n) => (n.id === data.target_host_id ? { ...n, status: "CONTAINED" } : n))
-              );
-            } else if (data.event === "ATTACK_PROPAGATION_COMPUTED") {
-              setNodes((prev) =>
-                prev.map((n) =>
-                  n.id !== data.patient_zero && n.status === "SAFE"
-                    ? { ...n, status: "INFECTED" }
-                    : n
-                )
-              );
-            }
-          } catch {}
-        };
-      } catch {
-        setWsStatus("offline");
+    const unsubStatus = threatStream.onStatusChange(setWsStatus);
+
+    const unsubEvents = threatStream.subscribe((evt: ThreatStreamEvent) => {
+      if (evt.event === "INCIDENT_CONTAINMENT_EXECUTED" && evt.target_host_id) {
+        setNodes((prev) =>
+          prev.map((n) => (n.id === evt.target_host_id ? { ...n, status: "CONTAINED" } : n))
+        );
+      } else if (evt.event === "ATTACK_PROPAGATION_COMPUTED") {
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.id !== evt.patient_zero && n.status === "SAFE"
+              ? { ...n, status: "INFECTED" }
+              : n
+          )
+        );
       }
-    };
+    });
 
-    connect();
+    const unsubReconnect = threatStream.onReconnect(() => {
+      authenticatedFetch(`${API_BASE}/api/v1/threat/topology/${tenantId}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: ThreatNode[] | null) => {
+          if (data && data.length > 0) {
+            setNodes(data);
+          }
+        })
+        .catch(() => {});
+    });
+
     return () => {
-      ws?.close();
-      clearTimeout(retryTimer);
+      unsubStatus();
+      unsubEvents();
+      unsubReconnect();
     };
-  }, []);
+  }, [tenantId]);
 
   const infected = nodes.filter((n) => n.status === "INFECTED").length;
   const contained = nodes.filter((n) => n.status === "CONTAINED").length;
   const safe = nodes.filter((n) => n.status === "SAFE").length;
 
   return (
-    <div className="w-full rounded-2xl bg-[#FFFFFF] border border-[#DFD6C9] p-6 shadow-warm-sm space-y-4">
+    <div className="w-full rounded-2xl bg-[#FFFFFF] border border-[#DFD6C9] p-4 sm:p-6 shadow-warm-sm space-y-4">
       {/* ── Section Header ────────────────────────────────────────────── */}
       <div className="flex flex-wrap justify-between items-center gap-3 border-b border-[#EEE6DC] pb-4">
         <div>
@@ -316,10 +388,25 @@ export const FallingBlockGrid: React.FC = () => {
         <AnimatePresence>
           {nodes.map((node, index) => {
             const isSelected = selectedNode?.id === node.id;
+            const isTargetHost = node.id === activeTargetHostId;
+            const isHistoricalSim = node.status === "CONTAINED" && isTargetHost && !isContained;
+            const isVerifiedContained = isTargetHost && isContained;
+
+            const displayStatus = isHistoricalSim
+              ? "CONTAINED (PRIOR SIM)"
+              : isVerifiedContained
+              ? "CONTAINED (VERIFIED)"
+              : node.status === "CONTAINED"
+              ? "CONTAINED (SIM)"
+              : node.status;
+
+            const canPropose = (node.status === "INFECTED" || isHistoricalSim) && !isContained;
 
             const cardStyle =
               node.status === "INFECTED"
                 ? "bg-[#FBF0ED] border-[#F3C4B8] hover:border-[#D26A50]"
+                : isHistoricalSim
+                ? "bg-[#FDF5E8] border-[#F4DCB6] hover:border-[#E6A548]"
                 : node.status === "CONTAINED"
                 ? "bg-[#F6EDF1] border-[#E5CDD8] hover:border-[#82465D]"
                 : "bg-[#FFFFFF] border-[#DFD6C9] hover:border-[#C8BEB0]";
@@ -327,6 +414,8 @@ export const FallingBlockGrid: React.FC = () => {
             const badgeStyle =
               node.status === "INFECTED"
                 ? "bg-[#F3C4B8] text-[#C24128]"
+                : isHistoricalSim
+                ? "bg-[#FDF5E8] text-[#A06316] border border-[#F4DCB6]"
                 : node.status === "CONTAINED"
                 ? "bg-[#E5CDD8] text-[#82465D]"
                 : "bg-[#E8F2EC] text-[#26694E]";
@@ -341,7 +430,7 @@ export const FallingBlockGrid: React.FC = () => {
                 onClick={() => setSelectedNode(node)}
                 tabIndex={0}
                 role="button"
-                aria-label={`Node ${node.name}, status ${node.status}`}
+                aria-label={`Node ${node.name}, status ${displayStatus}`}
                 onKeyDown={(e) => e.key === "Enter" && setSelectedNode(node)}
                 className={`relative p-3.5 rounded-xl border flex flex-col justify-between h-32 cursor-pointer transition-all focus:outline-none focus:ring-2 focus:ring-[#D26A50] shadow-warm-xs interactive-lift ${cardStyle} ${
                   isSelected ? "ring-2 ring-[#D26A50] shadow-warm-md" : ""
@@ -352,7 +441,7 @@ export const FallingBlockGrid: React.FC = () => {
                     {node.id}
                   </span>
                   <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${badgeStyle}`}>
-                    {node.status === "CONTAINED" ? "CONTAINED (SIM)" : node.status}
+                    {displayStatus}
                   </span>
                 </div>
 
@@ -369,7 +458,7 @@ export const FallingBlockGrid: React.FC = () => {
                   <span className="text-[10px] text-[#645C64] font-mono">
                     Hop {node.hops}
                   </span>
-                  {node.status === "INFECTED" && (
+                  {canPropose && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -389,38 +478,52 @@ export const FallingBlockGrid: React.FC = () => {
       </div>
 
       {/* ── Slide-Out Node Inspector Drawer ───────────────────────────── */}
-      {selectedNode && (
-        <div className="p-4 rounded-xl bg-[#F5EFE6] border border-[#DFD6C9] flex flex-wrap items-center justify-between gap-3 text-xs font-mono shadow-warm-xs">
-          <div className="flex items-center gap-3">
-            <span className="text-lg">🔎</span>
-            <div>
-              <span className="font-bold text-[#302B30] text-sm">{selectedNode.name}</span>{" "}
-              <span className="text-[#645C64]">({selectedNode.id} · {selectedNode.ip})</span>
-              <div className="text-[11px] text-[#645C64] mt-0.5">
-                Current Status: <strong className={selectedNode.status === "INFECTED" ? "text-[#C24128]" : selectedNode.status === "CONTAINED" ? "text-[#82465D]" : "text-[#26694E]"}>{selectedNode.status}</strong> · Propagation Distance: <strong>{selectedNode.hops === 0 ? "Patient Zero (Infected Origin Host)" : `${selectedNode.hops} hop${selectedNode.hops === 1 ? "" : "s"} from patient zero`}</strong>
+      {selectedNode && (() => {
+        const isTargetHost = selectedNode.id === activeTargetHostId;
+        const isHistoricalSim = selectedNode.status === "CONTAINED" && isTargetHost && !isContained;
+        const isVerifiedContained = isTargetHost && isContained;
+        const drawerDisplayStatus = isHistoricalSim
+          ? "CONTAINED (PRIOR SIM - Awaiting Incident Review)"
+          : isVerifiedContained
+          ? "CONTAINED (VERIFIED TOPOLOGY)"
+          : selectedNode.status === "CONTAINED"
+          ? "CONTAINED (SIM)"
+          : selectedNode.status;
+        const canProposeDrawer = (selectedNode.status === "INFECTED" || isHistoricalSim) && !isContained;
+
+        return (
+          <div className="p-4 rounded-xl bg-[#F5EFE6] border border-[#DFD6C9] flex flex-wrap items-center justify-between gap-3 text-xs font-mono shadow-warm-xs">
+            <div className="flex items-center gap-3">
+              <span className="text-lg">🔎</span>
+              <div>
+                <span className="font-bold text-[#302B30] text-sm">{selectedNode.name}</span>{" "}
+                <span className="text-[#645C64]">({selectedNode.id} · {selectedNode.ip})</span>
+                <div className="text-[11px] text-[#645C64] mt-0.5">
+                  Current Status: <strong className={selectedNode.status === "INFECTED" ? "text-[#C24128]" : isHistoricalSim ? "text-[#A06316]" : isVerifiedContained ? "text-[#26694E]" : "text-[#82465D]"}>{drawerDisplayStatus}</strong> · Propagation Distance: <strong>{selectedNode.hops === 0 ? "Patient Zero (Infected Origin Host)" : `${selectedNode.hops} hop${selectedNode.hops === 1 ? "" : "s"} from patient zero`}</strong>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex items-center gap-2">
-            {selectedNode.status === "INFECTED" && (
+            <div className="flex items-center gap-2">
+              {canProposeDrawer && (
+                <button
+                  onClick={() => handleProposeContainment(selectedNode)}
+                  disabled={proposingId === selectedNode.id || !!pendingProposal}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#D26A50] hover:bg-[#BE5B42] text-white font-semibold text-xs shadow-warm-xs transition-colors disabled:opacity-50"
+                >
+                  Propose Containment (Sim)
+                </button>
+              )}
               <button
-                onClick={() => handleProposeContainment(selectedNode)}
-                disabled={proposingId === selectedNode.id || !!pendingProposal}
-                className="px-3.5 py-1.5 rounded-lg bg-[#D26A50] hover:bg-[#BE5B42] text-white font-semibold text-xs shadow-warm-xs transition-colors disabled:opacity-50"
+                onClick={() => setSelectedNode(null)}
+                className="px-3 py-1.5 rounded-lg bg-[#FFFFFF] text-[#645C64] border border-[#DFD6C9] hover:bg-[#EEE6DC] transition-colors font-medium"
               >
-                Propose Containment (Sim)
+                Close
               </button>
-            )}
-            <button
-              onClick={() => setSelectedNode(null)}
-              className="px-3 py-1.5 rounded-lg bg-[#FFFFFF] text-[#645C64] border border-[#DFD6C9] hover:bg-[#EEE6DC] transition-colors font-medium"
-            >
-              Close
-            </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

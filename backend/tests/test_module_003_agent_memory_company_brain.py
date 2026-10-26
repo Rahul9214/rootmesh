@@ -37,8 +37,11 @@ from app.incident.service import IncidentResponseService, incident_service
 from app.main import app
 from app.security.auth import generate_dev_token, verify_access_token
 
-TENANT_ALPHA = "sec_ops_tenant_alpha"
-TENANT_BETA = "sec_ops_tenant_beta"
+from app.db.test_guard import TEST_TENANT_ALPHA, TEST_TENANT_BETA
+
+TENANT_ALPHA = TEST_TENANT_ALPHA
+TENANT_BETA = TEST_TENANT_BETA
+
 
 
 @pytest.fixture(scope="module")

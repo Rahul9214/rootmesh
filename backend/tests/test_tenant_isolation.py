@@ -2,26 +2,30 @@
 RootMesh — Multi-Tenant Isolation & Security Boundary Tests
 Tests: Graph data segregation across tenants, unauthorized tenant rejection (HTTP 403),
 and malformed / injection tenant parameter rejection (HTTP 400).
+Strictly isolated: Executes against test FalkorDB instance on port 6380 using test graphs.
 """
 from __future__ import annotations
 
-import pytest
-import requests
 import time
-from app.db.falkor_client import db_pool
+import pytest
+from starlette.testclient import TestClient
 
-API_BASE = "http://localhost:8000"
-TENANT_ALPHA = "sec_ops_tenant_alpha"
-TENANT_BETA = "sec_ops_tenant_beta"
+from app.db.falkor_client import db_pool
+from app.db.test_guard import TEST_TENANT_ALPHA, TEST_TENANT_BETA, TestDatabaseIsolationError
+from app.main import app
+from app.security.auth import generate_dev_token
+
+TENANT_ALPHA = TEST_TENANT_ALPHA
+TENANT_BETA = TEST_TENANT_BETA
 
 
 @pytest.fixture(scope="module")
 def setup_tenants():
-    """Ensure both tenant alpha and tenant beta graph instances exist."""
+    """Ensure both isolated test tenant graph instances exist on test database."""
     graph_a = db_pool.get_tenant_graph(TENANT_ALPHA)
     graph_b = db_pool.get_tenant_graph(TENANT_BETA)
 
-    # Seed an isolated node in beta
+    # Seed an isolated node in test beta graph
     try:
         graph_b.delete()
     except Exception:
@@ -55,6 +59,19 @@ def test_cross_tenant_data_isolation(setup_tenants):
     assert res_b[0][0] == 0, "CRITICAL: Cross-tenant data leak! Tenant Beta can read Tenant Alpha finding"
 
 
+def test_fail_closed_guard_blocks_persistent_tenant_mutation():
+    """
+    Verify fail-closed guard prevents any test from mutating live persistent graphs:
+    'sec_ops_tenant_alpha' write operations must be blocked with TestDatabaseIsolationError.
+    """
+    persistent_graph = db_pool.get_tenant_graph("sec_ops_tenant_alpha")
+    with pytest.raises(TestDatabaseIsolationError):
+        persistent_graph.query("CREATE (:RogueNode {id: 'fail-closed-test'})")
+
+    with pytest.raises(TestDatabaseIsolationError):
+        persistent_graph.delete()
+
+
 def test_tenant_id_injection_protection():
     """Verify malformed or injection tenant IDs raise ValueError in db_pool."""
     with pytest.raises(ValueError):
@@ -67,21 +84,24 @@ def test_tenant_id_injection_protection():
         db_pool.get_tenant_graph("invalid@tenant!#")
 
 
-def test_api_rejects_unauthorized_tenant():
-    """Verify FastAPI rejects unapproved tenant access with HTTP 403 Forbidden."""
-    try:
-        r = requests.get(f"{API_BASE}/api/v1/threat/pagerank/unauthorized_rogue_tenant", timeout=5)
-        assert r.status_code == 403
-        assert "Access denied" in r.json()["detail"]
-    except requests.exceptions.ConnectionError:
-        pytest.skip("FastAPI server not running")
+@pytest.fixture
+def client():
+    return TestClient(app)
 
 
-def test_api_rejects_malformed_tenant_injection():
-    """Verify FastAPI rejects malformed tenant format with HTTP 400 Bad Request."""
-    try:
-        r = requests.get(f"{API_BASE}/api/v1/threat/pagerank/bad;DROP%20GRAPH", timeout=5)
-        assert r.status_code == 400
-        assert "Malformed tenant ID format" in r.json()["detail"]
-    except requests.exceptions.ConnectionError:
-        pytest.skip("FastAPI server not running")
+def test_api_rejects_unauthorized_tenant(client):
+    """Verify FastAPI rejects unapproved tenant access with HTTP 403 Forbidden for authenticated principal."""
+    token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA, roles=["admin"])
+    headers = {"Authorization": f"Bearer {token}"}
+    r = client.get("/api/v1/threat/pagerank/unauthorized_rogue_tenant", headers=headers)
+    assert r.status_code == 403
+    assert "Access denied" in r.json()["detail"]
+
+
+def test_api_rejects_malformed_tenant_injection(client):
+    """Verify FastAPI rejects malformed tenant format with HTTP 400 Bad Request for authenticated principal."""
+    token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA, roles=["admin"])
+    headers = {"Authorization": f"Bearer {token}"}
+    r = client.get("/api/v1/threat/pagerank/bad;DROP%20GRAPH", headers=headers)
+    assert r.status_code == 400
+    assert "Malformed tenant ID format" in r.json()["detail"]

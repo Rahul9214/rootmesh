@@ -6,16 +6,19 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   backend-test:
-    name: Backend Tests & FalkorDB Integration
+    name: Backend Tests & Test Guard Isolation
     runs-on: ubuntu-latest
 
     services:
       falkordb:
         image: falkordb/falkordb:latest
         ports:
-          - 6379:6379
+          - 6380:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -36,40 +39,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
+          pip install pytest pytest-asyncio requests
 
-      - name: Seed Isolated Test Graph in FalkorDB
-        run: |
-          python backend/seed_threat_graph.py
-        env:
-          FALKOR_HOST: localhost
-          FALKOR_PORT: 6379
-          TENANT_ID: sec_ops_tenant_alpha
-
-      - name: Start RootMesh FastAPI Service
-        run: |
-          cd backend
-          python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
-          sleep 3
-        env:
-          FALKOR_HOST: localhost
-          FALKOR_PORT: 6379
-          TENANT_ID: sec_ops_tenant_alpha
-
-      - name: Verify Backend Health Check
-        run: |
-          curl --retry 10 --retry-delay 2 --retry-connrefused http://localhost:8000/health
-
-      - name: Run PyTest Verification Suite
+      - name: Run PyTest Regression Suite on Isolated Test Port 6380
         run: |
           cd backend
           pytest -v
         env:
           FALKOR_HOST: localhost
-          FALKOR_PORT: 6379
-          TENANT_ID: sec_ops_tenant_alpha
+          FALKOR_PORT: 6380
+          TENANT_ID: test_tenant_alpha
+          PYTHONPATH: .
 
   frontend-check:
-    name: Frontend Lint, Typecheck & Production Build
+    name: Frontend Lint, Typecheck, Unit Tests & Standalone Build
     runs-on: ubuntu-latest
 
     steps:
@@ -98,7 +81,21 @@ jobs:
           cd frontend
           npx tsc --noEmit
 
-      - name: Run Next.js 15 Production Build
+      - name: Run Frontend Unit & Truthfulness Test Suite
+        run: |
+          cd frontend
+          npm test
+
+      - name: Run Next.js 15 Standalone Production Build
         run: |
           cd frontend
           npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Verify Standalone Distribution Assets
+        run: |
+          cd frontend
+          test -f .next/standalone/public/brand/rootmesh-wordmark.png || exit 1
+          test -f .next/standalone/public/brand/rootmesh-icon.png || exit 1
+          echo "[✓] Standalone distribution assets verified successfully."

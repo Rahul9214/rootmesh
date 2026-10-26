@@ -47,3 +47,9 @@ falkordb_data/
 *.swo
 .DS_Store
 Thumbs.db
+# Additional local-only configuration and artifacts
+.env.*
+!.env.example
+*.rdb
+*.aof
+lighthouse*.json

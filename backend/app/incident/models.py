@@ -23,7 +23,7 @@ class ProposeActionRequest(BaseModel):
     incident_id: str = Field(..., description="Unique incident identifier")
     target_host_id: str = Field(..., description="Target host to isolate/contain")
     action_type: str = Field("CONTAIN_HOST_SIMULATION", description="Type of incident response action")
-    tenant_id: str = Field("sec_ops_tenant_alpha", description="Tenant workspace ID")
+    tenant_id: Optional[str] = Field(None, description="Tenant workspace ID (resolved from authenticated principal if omitted)")
     justification: str = Field(..., description="Operational justification based on graph evidence")
 
 
@@ -138,9 +138,19 @@ class ExecutionAuditResponse(BaseModel):
 
 class IncidentInvestigationRequest(BaseModel):
     patient_zero_id: str = Field("host-0", description="Patient Zero Host ID to investigate")
-    tenant_id: str = Field("sec_ops_tenant_alpha", description="Tenant ID")
+    tenant_id: Optional[str] = Field(None, description="Tenant ID (resolved from authenticated principal if omitted)")
     incident_id: Optional[str] = Field(None, description="Optional incident ID (generated if not provided)")
     title: Optional[str] = Field(None, description="Incident title or description")
+
+
+class IncidentSummaryResponse(BaseModel):
+    incident_id: str
+    title: str
+    severity: str
+    status: str
+    patient_zero_id: str
+    created_at: float
+    company_brain: CompanyBrainContext
 
 
 class IncidentInvestigationReport(BaseModel):

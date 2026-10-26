@@ -1,14 +1,16 @@
 """
 RootMesh — Cypher Query Library Unit Tests
 Tests: Query syntax, parameter validation, shortest path, and multi-tenant graph isolation.
+Strictly isolated: Runs against disposable test graph on port 6380.
 """
 from __future__ import annotations
 
 import pytest
 from app.db.falkor_client import db_pool
+from app.db.test_guard import TEST_TENANT_ALPHA
 from app.db import queries
 
-TENANT_ID = "sec_ops_tenant_alpha"
+TENANT_ID = TEST_TENANT_ALPHA
 
 
 @pytest.fixture(scope="module")

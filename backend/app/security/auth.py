@@ -192,10 +192,217 @@ def create_access_token(
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def verify_access_token(token: str) -> SecurityPrincipal:
+# ──────────────────────────────────────────────
+# Clerk B2B & Cryptographic Token Verification
+# ──────────────────────────────────────────────
+
+_jwk_clients: Dict[str, jwt.PyJWKClient] = {}
+
+
+def _get_jwk_client(jwks_url: str) -> jwt.PyJWKClient:
+    """Cached PyJWKClient instance for Clerk JWKS keys."""
+    if jwks_url not in _jwk_clients:
+        _jwk_clients[jwks_url] = jwt.PyJWKClient(jwks_url, cache_keys=True, max_cached_keys=16)
+    return _jwk_clients[jwks_url]
+
+
+def verify_clerk_token(token: str) -> SecurityPrincipal:
     """
-    Decodes and cryptographically verifies an access token.
-    Enforces signature validity, expiration, issuer, and audience.
+    Decodes and cryptographically verifies a Clerk RS256 session token.
+    Validates:
+      1. RS256 algorithm and valid headers
+      2. Signature using Clerk JWKS endpoint or configured PEM public key
+      3. Issuer (if CLERK_ISSUER is configured)
+      4. Expiration and Not-Before timestamps
+      5. Authorized party ('azp') origin
+      6. Clerk Organization membership mapped to trusted RootMesh tenant context
+      7. RBAC least privilege mapping with strict separation of duties:
+         Clerk org:admin maps to RootMesh responder (cannot approve or execute containment).
+         Only explicit rootmesh:admin grants administrative approval/execution powers.
+    """
+    try:
+        header = jwt.get_unverified_header(token)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: Malformed token header ({type(e).__name__}).",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+
+    alg = header.get("alg")
+    if alg != "RS256":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: Invalid token algorithm '{alg}'. RS256 is required for Clerk session tokens.",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+
+    # Resolve cryptographic key strictly from configured public key or trusted JWKS endpoint.
+    # NEVER discover or fetch keys from an untrusted URL or issuer supplied by an unverified token.
+    key = None
+    if settings.clerk_pem_public_key:
+        key = settings.clerk_pem_public_key.strip()
+    elif settings.clerk_jwks_url:
+        try:
+            client = _get_jwk_client(settings.clerk_jwks_url)
+            signing_key = client.get_signing_key_from_jwt(token)
+            key = signing_key.key
+        except Exception as e:
+            logger.error("Failed to retrieve signing key from Clerk JWKS: %s", type(e).__name__)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Authentication failed: Could not resolve key from Clerk JWKS ({type(e).__name__}).",
+                headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+            )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR if settings.is_production else status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Clerk verification configuration (CLERK_JWKS_URL or CLERK_PEM_PUBLIC_KEY) is missing.",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+
+    # Require explicitly configured trusted Clerk issuer
+    if not settings.clerk_issuer:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR if settings.is_production else status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Trusted Clerk issuer is not configured on server (missing CLERK_ISSUER).",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+
+    decode_kwargs: Dict[str, Any] = {
+        "algorithms": ["RS256"],
+        "issuer": settings.clerk_issuer,
+        "options": {
+            "require": ["exp", "sub", "iss"],
+            "verify_exp": True,
+            "verify_iss": True,
+        },
+    }
+
+    try:
+        payload = jwt.decode(token, key, **decode_kwargs)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Clerk session token has expired.",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\", error_description=\"token_expired\""},
+        )
+    except jwt.ImmatureSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Clerk session token is not yet valid (nbf).",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+    except jwt.InvalidIssuerError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Invalid token issuer.",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+    except jwt.InvalidSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Invalid cryptographic signature.",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: Invalid Clerk token ({type(e).__name__}).",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+
+    # Validate nbf with leeway
+    nbf = payload.get("nbf")
+    if nbf and nbf > (time.time() + 5):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Clerk session token is not yet valid (nbf check).",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+
+    # Validate authorized frontend origin ('azp' claim)
+    azp = payload.get("azp")
+    if azp and settings.authorized_parties_list != ["*"]:
+        clean_azp = azp.rstrip("/")
+        if clean_azp not in settings.authorized_parties_list:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Authentication failed: Authorized party '{azp}' is not authorized for RootMesh API.",
+                headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+            )
+
+    # Validate Clerk Organization Context and map strictly to Tenant Context
+    # Must use verified Organization ID claim. Never use organization slug prefixes or wildcard mappings.
+    org_obj = payload.get("o") if isinstance(payload.get("o"), dict) else {}
+    org_id = payload.get("org_id") or org_obj.get("id")
+
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authorization failed: Clerk session token lacks organization context ('org_id' or 'o.id'). A valid organization membership is required.",
+        )
+
+    tenant_id = settings.get_tenant_for_org(org_id)
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Authorization failed: Organization '{org_id}' is not mapped to an authorized RootMesh tenant context.",
+        )
+
+    if tenant_id not in settings.authorized_tenants:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Authorization failed: Tenant '{tenant_id}' is not authorized on this RootMesh node.",
+        )
+
+    # Map RBAC Role with strict separation of duties
+    org_role = str(payload.get("org_role") or org_obj.get("rol") or "")
+    explicit_role = payload.get("rootmesh_role")
+    explicit_roles = payload.get("roles", [])
+
+    assigned_role = "investigator"  # Default least-privilege role
+
+    if explicit_role in ROLE_PERMISSIONS:
+        assigned_role = explicit_role
+    elif isinstance(explicit_roles, list) and any(r in ROLE_PERMISSIONS for r in explicit_roles):
+        for candidate in ["admin", "responder", "analyst", "investigator"]:
+            if candidate in explicit_roles:
+                assigned_role = candidate
+                break
+    elif org_role in {"org:rootmesh_admin", "rootmesh:admin"}:
+        assigned_role = "admin"
+    elif org_role in {"org:admin", "admin", "org:responder", "responder"}:
+        # SEPARATION OF DUTIES ENFORCEMENT:
+        # Generic Clerk org:admin maps to RootMesh 'responder'.
+        # A responder can investigate and propose containment, but CANNOT approve or execute.
+        assigned_role = "responder"
+    elif org_role in {"org:analyst", "analyst"}:
+        assigned_role = "analyst"
+    elif org_role in {"org:member", "member", "org:investigator", "investigator"}:
+        assigned_role = "investigator"
+
+    permissions = sorted(list(ROLE_PERMISSIONS.get(assigned_role, ROLE_PERMISSIONS["investigator"])))
+
+    sub = str(payload.get("sub", "unknown"))
+    username = str(payload.get("username") or payload.get("email") or sub)
+    email = str(payload.get("email") or (f"{username}@company.com" if "@" not in username else username))
+
+    return SecurityPrincipal(
+        principal_id=sub,
+        username=username,
+        email=email,
+        tenant_id=tenant_id,
+        roles=[assigned_role],
+        permissions=permissions,
+        workspaces=[tenant_id],
+    )
+
+
+def _verify_legacy_dev_token(token: str) -> SecurityPrincipal:
+    """
+    Decodes and cryptographically verifies a legacy development access token.
+    Disabled unconditionally in production mode.
     """
     settings.validate_production_security()
     try:
@@ -243,6 +450,76 @@ def verify_access_token(token: str) -> SecurityPrincipal:
     )
 
 
+def verify_access_token(token: str) -> SecurityPrincipal:
+    """
+    Decodes and cryptographically verifies an access token.
+    Routes RS256 tokens to Clerk session verification.
+    Rejects legacy HS256 tokens when Clerk authentication is configured.
+    """
+    try:
+        header = jwt.get_unverified_header(token)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: Invalid token ({type(e).__name__}).",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+
+    alg = header.get("alg")
+    if alg == "RS256":
+        return verify_clerk_token(token)
+
+    # If Clerk is configured on this node, reject legacy tokens
+    if settings.clerk_jwks_url or settings.clerk_pem_public_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Legacy tokens are disabled. Clerk RS256 authentication required.",
+            headers={"WWW-Authenticate": "Bearer error=\"invalid_token\""},
+        )
+
+    return _verify_legacy_dev_token(token)
+
+
+def create_test_clerk_token(
+    sub: str = "user_2test123",
+    username: str = "alex.rivera",
+    email: str = "alex.rivera@company.com",
+    org_id: str = "org_2secops_alpha",
+    org_role: str = "org:admin",
+    rootmesh_role: Optional[str] = None,
+    azp: str = "http://localhost:3000",
+    issuer: Optional[str] = None,
+    private_key: Optional[Any] = None,
+    expires_in_seconds: int = 3600,
+    nbf_offset_seconds: int = 0,
+    custom_claims: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Helper to generate signed RS256 Clerk session tokens for test and validation suites."""
+    now = int(time.time())
+    payload: Dict[str, Any] = {
+        "sub": sub,
+        "iss": issuer or settings.clerk_issuer or "https://clerk.rootmesh.security",
+        "azp": azp,
+        "exp": now + expires_in_seconds,
+        "iat": now,
+        "nbf": now + nbf_offset_seconds,
+        "sid": f"sess_{uuid.uuid4().hex[:16]}",
+        "org_id": org_id,
+        "org_role": org_role,
+        "username": username,
+        "email": email,
+    }
+    if rootmesh_role:
+        payload["rootmesh_role"] = rootmesh_role
+    if custom_claims:
+        payload.update(custom_claims)
+
+    if not private_key:
+        raise ValueError("A private RSA key must be provided to sign the test token.")
+
+    return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": "test-clerk-kid-1"})
+
+
 # ──────────────────────────────────────────────
 # FastAPI Dependency Injection Boundary
 # ──────────────────────────────────────────────
@@ -255,23 +532,11 @@ async def get_current_principal(
 ) -> SecurityPrincipal:
     """
     Default-to-deny authentication dependency.
-    Extracts Bearer token from HTTP Authorization header and verifies claims.
-    Under dev mode ('auth_mode == dev'), falls back to a verified dev admin principal
-    if no credentials header is provided, preserving local developer velocity and existing tests.
-    Under production mode ('auth_mode == prod'), unconditionally rejects unauthenticated requests with 401.
+    Extracts Bearer token from HTTP Authorization header and cryptographically verifies claims.
+    Unconditionally rejects unauthenticated requests with HTTP 401 Unauthorized.
+    Never assigns an automatic admin, responder, or other privileged principal.
     """
     if not credentials or not credentials.credentials:
-        if settings.auth_mode == "dev":
-            logger.debug("Unauthenticated request accepted under local development auth mode.")
-            return SecurityPrincipal(
-                principal_id="usr-dev-admin-00",
-                username="alex.rivera",
-                email="alex.rivera@company.com",
-                tenant_id="sec_ops_tenant_alpha",
-                roles=["admin"],
-                permissions=sorted(list(ROLE_PERMISSIONS["admin"])),
-                workspaces=["sec_ops_tenant_alpha", "sec_ops_tenant_beta"],
-            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required: Missing 'Authorization: Bearer <token>' header.",
