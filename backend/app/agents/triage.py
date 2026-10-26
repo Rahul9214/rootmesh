@@ -76,7 +76,7 @@ class TriageAgent:
         # 3. Monte Carlo Blast Radius UDF
         blast_results: Dict[str, int] = {}
         try:
-            udf_cypher = "RETURN blast_radius_lib.blast_radius($pz, 100) AS result"
+            udf_cypher = "MATCH (h:Host {id: $pz}) RETURN blast_radius_lib.blast_radius(h, 100) AS result"
             res = graph.ro_query(udf_cypher, {"pz": host_id}).result_set
             if res and res[0][0]:
                 raw = res[0][0]

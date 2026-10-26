@@ -332,7 +332,7 @@ def falkordb_blast_radius(
     except (ValueError, TypeError):
         runs = 500
 
-    cypher = f"RETURN blast_radius_lib.blast_radius($pz, {runs}) AS result"
+    cypher = f"MATCH (h:Host {{id: $pz}}) RETURN blast_radius_lib.blast_radius(h, {runs}) AS result"
     try:
         graph = db.select_graph(tenant_id)
         res = graph.ro_query(cypher, {"pz": pz}).result_set
