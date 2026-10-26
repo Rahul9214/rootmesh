@@ -85,7 +85,6 @@ AUTHORIZED_USERS: Dict[str, Dict[str, Any]] = {
         "tenant_id": "sec_ops_tenant_alpha",
         "workspaces": ["sec_ops_tenant_alpha", "sec_ops_tenant_beta"],
         "roles": ["admin"],
-        "secret": "rivera-secops-2026",
     },
     "sarah.chen": {
         "principal_id": "usr-sarah-chen-02",
@@ -94,7 +93,6 @@ AUTHORIZED_USERS: Dict[str, Dict[str, Any]] = {
         "tenant_id": "sec_ops_tenant_alpha",
         "workspaces": ["sec_ops_tenant_alpha"],
         "roles": ["responder"],
-        "secret": "chen-responder-2026",
     },
     "marcus.vance": {
         "principal_id": "usr-marcus-vance-03",
@@ -103,7 +101,6 @@ AUTHORIZED_USERS: Dict[str, Dict[str, Any]] = {
         "tenant_id": "sec_ops_tenant_alpha",
         "workspaces": ["sec_ops_tenant_alpha"],
         "roles": ["analyst"],
-        "secret": "vance-analyst-2026",
     },
     "guest.auditor": {
         "principal_id": "usr-guest-auditor-04",
@@ -112,7 +109,6 @@ AUTHORIZED_USERS: Dict[str, Dict[str, Any]] = {
         "tenant_id": "sec_ops_tenant_alpha",
         "workspaces": ["sec_ops_tenant_alpha"],
         "roles": ["investigator"],
-        "secret": "guest-audit-2026",
     },
     "beta.operator": {
         "principal_id": "usr-beta-operator-05",
@@ -121,7 +117,6 @@ AUTHORIZED_USERS: Dict[str, Dict[str, Any]] = {
         "tenant_id": "sec_ops_tenant_beta",
         "workspaces": ["sec_ops_tenant_beta"],
         "roles": ["admin"],
-        "secret": "beta-lead-2026",
     },
 }
 

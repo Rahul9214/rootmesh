@@ -94,46 +94,136 @@ def test_tampered_signature_rejected():
     assert "invalid" in str(exc_info.value).lower() or "signature" in str(exc_info.value).lower()
 
 
-def test_auth_login_endpoint():
+def test_auth_login_endpoint(monkeypatch):
     """Verify POST /api/v1/auth/token authenticates authorized user and rejects invalid credentials."""
+    import uuid
+
+    alex_secret = f"test-secret-alex-{uuid.uuid4()}"
+    sarah_secret = f"test-secret-sarah-{uuid.uuid4()}"
+    monkeypatch.setenv("ROOTMESH_SECRET_ALEX_RIVERA", alex_secret)
+    monkeypatch.setenv("ROOTMESH_SECRET_SARAH_CHEN", sarah_secret)
     client = TestClient(app)
 
     # Valid credentials
     res = client.post(
         "/api/v1/auth/token",
-        json={"username": "alex.rivera", "secret": "rivera-secops-2026", "tenant_id": TENANT_ALPHA},
+        json={"username": "alex.rivera", "secret": alex_secret},
     )
     assert res.status_code == 200
     data = res.json()
     assert "access_token" in data
     assert data["principal"]["username"] == "alex.rivera"
+    assert data["principal"]["tenant_id"] == TENANT_ALPHA
 
     # Invalid secret
     res_bad = client.post(
         "/api/v1/auth/token",
-        json={"username": "alex.rivera", "secret": "wrong-secret", "tenant_id": TENANT_ALPHA},
+        json={"username": "alex.rivera", "secret": "wrong-secret-value"},
     )
     assert res_bad.status_code == 401
+    assert "Authentication failed" in res_bad.json()["detail"]
+
+    # Unknown username
+    res_unknown = client.post(
+        "/api/v1/auth/token",
+        json={"username": "unknown.principal", "secret": alex_secret},
+    )
+    assert res_unknown.status_code == 401
+    assert "Authentication failed" in res_unknown.json()["detail"]
 
     # Unauthorized workspace requested
     res_bad_ws = client.post(
         "/api/v1/auth/token",
-        json={"username": "sarah.chen", "secret": "chen-responder-2026", "tenant_id": TENANT_BETA},
+        json={"username": "sarah.chen", "secret": sarah_secret, "tenant_id": TENANT_BETA},
     )
     assert res_bad_ws.status_code == 403
+    assert "not a member" in res_bad_ws.json()["detail"]
+
+
+def test_auth_login_disabled_in_production(monkeypatch):
+    """Verify POST /api/v1/auth/token fails closed (HTTP 403) when in production auth mode."""
+    import uuid
+
+    alex_secret = f"test-secret-alex-{uuid.uuid4()}"
+    monkeypatch.setenv("ROOTMESH_SECRET_ALEX_RIVERA", alex_secret)
+    monkeypatch.setattr(settings, "auth_mode", "prod")
+    client = TestClient(app)
+
+    res = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": alex_secret},
+    )
+    assert res.status_code == 403
+    assert "disabled in production" in res.json()["detail"].lower()
+
+
+def test_auth_login_fails_closed_when_env_credential_missing_or_empty(monkeypatch):
+    """Verify POST /api/v1/auth/token fails closed (401) when ROOTMESH_SECRET_<USER> is absent, empty, or whitespace."""
+    client = TestClient(app)
+
+    # 1. Environment variable absent
+    monkeypatch.delenv("ROOTMESH_SECRET_ALEX_RIVERA", raising=False)
+    res_absent = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": "candidate-secret"},
+    )
+    assert res_absent.status_code == 401
+    assert "Authentication failed" in res_absent.json()["detail"]
+
+    # 2. Environment variable empty string
+    monkeypatch.setenv("ROOTMESH_SECRET_ALEX_RIVERA", "")
+    res_empty = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": "candidate-secret"},
+    )
+    assert res_empty.status_code == 401
+    assert "Authentication failed" in res_empty.json()["detail"]
+
+    # 3. Environment variable whitespace only
+    monkeypatch.setenv("ROOTMESH_SECRET_ALEX_RIVERA", "   	  ")
+    res_ws = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": "candidate-secret"},
+    )
+    assert res_ws.status_code == 401
+    assert "Authentication failed" in res_ws.json()["detail"]
+
+    # 4. Request secret is empty or whitespace only while env var is configured
+    from uuid import uuid4
+    monkeypatch.setenv("ROOTMESH_SECRET_ALEX_RIVERA", uuid4().hex)
+    res_req_empty = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": ""},
+    )
+    assert res_req_empty.status_code == 401
+    assert "Authentication failed" in res_req_empty.json()["detail"]
+
+    res_req_ws = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": "   "},
+    )
+    assert res_req_ws.status_code == 401
+    assert "Authentication failed" in res_req_ws.json()["detail"]
 
 
 def test_dev_token_endpoint():
-    """Verify POST /api/v1/auth/dev-token issues verified JWT for development."""
+    """
+    Verify unauthenticated HTTP POST /api/v1/auth/dev-token returns HTTP 403 by default,
+    while the internal generate_dev_token() Python helper remains functional for test harnesses.
+    """
     client = TestClient(app)
     res = client.post(
         "/api/v1/auth/dev-token",
         json={"username": "alex.rivera", "tenant_id": TENANT_ALPHA, "roles": ["admin"]},
     )
-    assert res.status_code == 200
-    data = res.json()
-    assert "access_token" in data
-    assert data["principal"]["tenant_id"] == TENANT_ALPHA
+    assert res.status_code == 403
+    assert "disabled" in res.json()["detail"].lower()
+
+    # Internal Python helper must continue to function for backend tests
+    internal_token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA)
+    principal = verify_access_token(internal_token)
+    assert principal.username == "alex.rivera"
+    assert principal.tenant_id == TENANT_ALPHA
 
 
 # ──────────────────────────────────────────────
