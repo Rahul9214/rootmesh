@@ -4,6 +4,8 @@
  * organization switching, and React effect re-execution protections.
  */
 import test, { describe, beforeEach, afterEach } from "node:test";
+import fs from "node:fs";
+import path from "node:path";
 import assert from "node:assert/strict";
 
 import {
@@ -11,6 +13,7 @@ import {
   setClerkSignOut,
   setClerkLoaded,
   isClerkLoaded,
+  isClerkConfigured,
   resetAuthStateForTesting,
   refreshBackendPrincipal,
   syncClerkSession,
@@ -656,5 +659,83 @@ describe("RootMesh Clerk Authentication Lifecycle & Regression Suite", () => {
     assert.strictEqual(parsed.type, "auth");
     assert.strictEqual(parsed.token, "token_delayed_init");
     assert.strictEqual(parsed.tenant_id, "sec_ops_tenant_alpha");
+  });
+
+  test("PR #9 Requirement 1 & 2: isClerkConfigured dynamically reports configuration status without fake credentials", () => {
+    const origKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+    const origServerKey = process.env.CLERK_PUBLISHABLE_KEY;
+
+    try {
+      delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+      delete process.env.CLERK_PUBLISHABLE_KEY;
+      assert.strictEqual(isClerkConfigured(), false, "Must return false when publishable key is unset");
+
+      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = "pk_test_prod_credential_verification";
+      assert.strictEqual(isClerkConfigured(), true, "Must return true when NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY is present");
+
+      delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+      process.env.CLERK_PUBLISHABLE_KEY = "pk_test_server_credential_verification";
+      assert.strictEqual(isClerkConfigured(), true, "Must return true when CLERK_PUBLISHABLE_KEY is present");
+    } finally {
+      if (origKey !== undefined) {
+        process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY = origKey;
+      } else {
+        delete process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+      }
+      if (origServerKey !== undefined) {
+        process.env.CLERK_PUBLISHABLE_KEY = origServerKey;
+      } else {
+        delete process.env.CLERK_PUBLISHABLE_KEY;
+      }
+    }
+  });
+
+  test("PR #9 Requirement 1 & 6: Top-level page entry point never conditionally invokes React hooks", () => {
+    const pageSrc = fs.readFileSync(path.join(process.cwd(), "app", "page.tsx"), "utf8");
+
+    // HomePage default export must not call Clerk hooks directly
+    const homePageIdx = pageSrc.indexOf("export default function HomePage()");
+    assert.ok(homePageIdx !== -1, "HomePage must be exported as default function");
+    const homePageCode = pageSrc.slice(homePageIdx);
+
+    assert.ok(!homePageCode.includes("useAuth("), "HomePage entry point must not call useAuth directly");
+    assert.ok(!homePageCode.includes("useUser("), "HomePage entry point must not call useUser directly");
+    assert.ok(!homePageCode.includes("useOrganization("), "HomePage entry point must not call useOrganization directly");
+    assert.ok(!homePageCode.includes("useClerk("), "HomePage entry point must not call useClerk directly");
+
+    // Must cleanly branch between unconfigured and authenticated components
+    assert.ok(homePageCode.includes("UnconfiguredLandingApp"), "HomePage must render UnconfiguredLandingApp when unconfigured");
+    assert.ok(homePageCode.includes("ClerkAuthenticatedApp"), "HomePage must render ClerkAuthenticatedApp when configured");
+
+    // ClerkAuthenticatedApp must encapsulate all Clerk hooks unconditionally
+    const clerkAppMatch = pageSrc.match(/function ClerkAuthenticatedApp()[^{]*{/);
+    assert.ok(clerkAppMatch, "ClerkAuthenticatedApp must exist as separate component");
+  });
+
+  test("PR #9 Requirement 2 & 4: Unconfigured mode renders accessible authentication-unavailable state rather than nonfunctional buttons", () => {
+    const landingSrc = fs.readFileSync(path.join(process.cwd(), "components", "PublicLandingExperience.tsx"), "utf8");
+    const pageSrc = fs.readFileSync(path.join(process.cwd(), "app", "page.tsx"), "utf8");
+
+    // PublicLandingExperience must support unconfigured mode without mounting SignInButton
+    assert.ok(landingSrc.includes("isClerkConfigured"), "PublicLandingExperience must accept isClerkConfigured prop");
+    assert.ok(landingSrc.includes("Authentication Unavailable"), "PublicLandingExperience must provide accessible disabled auth state");
+    assert.ok(landingSrc.includes('aria-disabled="true"'), "PublicLandingExperience must set aria-disabled on unavailable CTA");
+    assert.ok(landingSrc.includes("cursor-not-allowed"), "PublicLandingExperience must set cursor-not-allowed on unavailable CTA");
+
+    // TopNavbar must display accessible Auth Unavailable pill when Clerk is unconfigured
+    assert.ok(pageSrc.includes("Auth Unavailable"), "TopNavbar must provide Auth Unavailable pill");
+    assert.ok(pageSrc.includes('role="status"'), "TopNavbar unavailable state must have role=status");
+    assert.ok(pageSrc.includes("isClerkConfigured ? ("), "TopNavbar must guard SignInButton behind isClerkConfigured");
+  });
+
+  test("PR #9 Requirement 5: Configured mode preserves complete multi-tenant Clerk flows", () => {
+    const pageSrc = fs.readFileSync(path.join(process.cwd(), "app", "page.tsx"), "utf8");
+
+    // Must preserve full sign-in and org management in ClerkAuthenticatedApp
+    assert.ok(pageSrc.includes("<OrganizationSwitcher"), "Must preserve OrganizationSwitcher in TopNavbar");
+    assert.ok(pageSrc.includes("<UserButton"), "Must preserve UserButton in TopNavbar");
+    assert.ok(pageSrc.includes("syncClerkSession"), "Must preserve session synchronization with backend");
+    assert.ok(pageSrc.includes("onAuthStateChanged"), "Must preserve authenticated principal subscription");
+    assert.ok(pageSrc.includes("isClerkConfigured={true}"), "ClerkAuthenticatedApp must explicitly pass configured mode");
   });
 });

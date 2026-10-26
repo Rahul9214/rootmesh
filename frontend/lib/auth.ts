@@ -81,6 +81,16 @@ export function setClerkLoaded(loaded: boolean): void {
 }
 
 /**
+ * Checks whether Clerk publishable credentials are configured in the environment.
+ */
+export function isClerkConfigured(): boolean {
+  return Boolean(
+    process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ||
+    process.env.CLERK_PUBLISHABLE_KEY
+  );
+}
+
+/**
  * Checks whether Clerk has completed its client-side initialization.
  */
 export function isClerkLoaded(): boolean {
@@ -91,10 +101,7 @@ export function isClerkLoaded(): boolean {
       clerkLoaded = true;
       return true;
     }
-    const hasClerkKey = Boolean(
-      process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ||
-      process.env.CLERK_PUBLISHABLE_KEY
-    );
+    const hasClerkKey = isClerkConfigured();
     if (!hasClerkKey) {
       return true;
     }

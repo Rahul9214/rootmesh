@@ -3,12 +3,20 @@
 import React from "react";
 import { SignInButton } from "@clerk/nextjs";
 import { ProductWalkthroughReplay } from "@/components/ProductWalkthroughReplay";
+import { isClerkConfigured as checkClerkConfigured } from "@/lib/auth";
 
 const API_DOCS_URL = process.env.NEXT_PUBLIC_API_URL
   ? `${process.env.NEXT_PUBLIC_API_URL}/docs`
   : "http://localhost:8000/docs";
 
-export function PublicLandingExperience() {
+export interface PublicLandingExperienceProps {
+  isClerkConfigured?: boolean;
+}
+
+export function PublicLandingExperience({
+  isClerkConfigured: isConfiguredProp,
+}: PublicLandingExperienceProps = {}) {
+  const isClerkConfigured = isConfiguredProp !== undefined ? isConfiguredProp : checkClerkConfigured();
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-16 space-y-16 sm:space-y-24">
       {/* ── Section A: Editorial Product Hero ────────────────────────────── */}
@@ -29,7 +37,8 @@ export function PublicLandingExperience() {
 
         {/* Clear Primary & Secondary CTAs */}
         <div className="pt-2 flex flex-wrap items-center gap-3 sm:gap-4">
-          <SignInButton mode="modal">
+          {isClerkConfigured ? (
+            <SignInButton mode="modal">
             <button
               type="button"
               className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#D26A50] hover:bg-[#BE5B42] text-white text-sm font-semibold transition-all shadow-warm-sm hover:shadow-warm-md cursor-pointer"
@@ -37,6 +46,19 @@ export function PublicLandingExperience() {
               <span>🔐 Sign In with Organization</span>
             </button>
           </SignInButton>
+          ) : (
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              aria-label="Authentication unavailable: Clerk credentials are not configured on this deployment"
+              title="Authentication unavailable: Clerk credentials are not configured on this deployment"
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#EEE6DC] text-[#7A717A] text-sm font-semibold cursor-not-allowed border border-[#DFD6C9]"
+            >
+              <span aria-hidden="true">🔒</span>
+              <span>Authentication Unavailable</span>
+            </button>
+          )}
 
           <a
             href="#product-walkthrough"
@@ -268,14 +290,28 @@ export function PublicLandingExperience() {
         </p>
 
         <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
-          <SignInButton mode="modal">
+          {isClerkConfigured ? (
+            <SignInButton mode="modal">
+              <button
+                type="button"
+                className="px-6 py-3 rounded-xl bg-[#D26A50] hover:bg-[#BE5B42] text-white font-semibold text-sm transition-all shadow-warm-sm hover:shadow-warm-md cursor-pointer"
+              >
+                Sign In to Your Workspace
+              </button>
+            </SignInButton>
+          ) : (
             <button
               type="button"
-              className="px-6 py-3 rounded-xl bg-[#D26A50] hover:bg-[#BE5B42] text-white font-semibold text-sm transition-all shadow-warm-sm hover:shadow-warm-md cursor-pointer"
+              disabled
+              aria-disabled="true"
+              aria-label="Authentication unavailable: Clerk credentials are not configured on this deployment"
+              title="Authentication unavailable: Clerk credentials are not configured on this deployment"
+              className="px-6 py-3 rounded-xl bg-[#EEE6DC] text-[#7A717A] font-semibold text-sm cursor-not-allowed border border-[#DFD6C9]"
             >
-              Sign In to Your Workspace
+              <span aria-hidden="true">🔒</span>
+              <span>Authentication Unavailable</span>
             </button>
-          </SignInButton>
+          )}
 
           <a
             href={API_DOCS_URL}

@@ -35,6 +35,7 @@ import {
   syncClerkSession,
   onAuthStateChanged,
   authenticatedFetch,
+  isClerkConfigured,
   type PrincipalInfo,
 } from "@/lib/auth";
 import {
@@ -66,9 +67,10 @@ interface TopNavbarProps {
   systemHealth: SystemHealth;
   isAuthorized: boolean;
   organizationName?: string;
+  isClerkConfigured?: boolean;
 }
 
-function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organizationName }: TopNavbarProps) {
+function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organizationName, isClerkConfigured = true }: TopNavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
@@ -223,6 +225,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
                 />
               </div>
             ) : (
+              isClerkConfigured ? (
               <SignInButton mode="modal">
                 <button
                   type="button"
@@ -231,6 +234,17 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
                   <span>🔐 Sign In</span>
                 </button>
               </SignInButton>
+            ) : (
+              <span
+                role="status"
+                aria-label="Authentication unavailable: Clerk publishable key is not configured"
+                title="Authentication unavailable: Clerk publishable key is not configured"
+                className="inline-flex items-center justify-center whitespace-nowrap gap-1.5 px-2.5 sm:px-3 py-1.5 min-h-[32px] rounded-md bg-[#EEE6DC] text-[#7A717A] text-xs font-mono font-medium border border-[#DFD6C9] cursor-not-allowed select-none"
+              >
+                <span aria-hidden="true">🔒</span>
+                <span>Auth Unavailable</span>
+              </span>
+            )
             )}
 
             {/* Desktop Secondary Link: API Docs */}
@@ -355,7 +369,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
 // ──────────────────────────────────────────────
 
 function SignedOutWelcomeView() {
-  return <PublicLandingExperience />;
+  return <PublicLandingExperience isClerkConfigured={true} />;
 }
 
 // ──────────────────────────────────────────────
@@ -477,7 +491,7 @@ function AuthLoadingView() {
 // Main RootMesh Application Component
 // ──────────────────────────────────────────────
 
-export default function HomePage() {
+function ClerkAuthenticatedApp() {
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user } = useUser();
   const { organization, membership, isLoaded: isOrgLoaded } = useOrganization();
@@ -1011,6 +1025,7 @@ export default function HomePage() {
         systemHealth={systemHealth}
         isAuthorized={isAuthorized}
         organizationName={organizationName}
+        isClerkConfigured={true}
       />
 
       {/* ── Conditional Authentication States ─────────────────────────── */}
@@ -1257,8 +1272,14 @@ export default function HomePage() {
       )}
       </div>
 
-      {/* ── Editorial Warm Light Footer ───────────────────────────────── */}
-      <footer className="relative z-10 border-t border-[#DFD6C9] bg-[#FAF7F2]/95 backdrop-blur-sm mt-16 px-4 sm:px-6 py-8">
+      <Footer />
+    </main>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="relative z-10 border-t border-[#DFD6C9] bg-[#FAF7F2]/95 backdrop-blur-sm mt-16 px-4 sm:px-6 py-8">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center sm:items-start gap-4 text-xs text-[#645C64] font-mono">
           <div className="flex items-center gap-2.5">
             <Image
@@ -1311,6 +1332,53 @@ export default function HomePage() {
           Notice: Incident intelligence, Company Brain organizational graphs, and containment execution operate in Graph Topology Simulation Mode. In current release, actions model lateral edge severance and verify impact reduction safely without modifying production network firewalls.
         </div>
       </footer>
+  );
+}
+
+function UnconfiguredLandingApp() {
+  const [systemHealth, setSystemHealth] = useState<SystemHealth>(getCachedSystemHealth());
+
+  useEffect(() => {
+    checkSystemHealth();
+    const unsub = onSystemHealthChanged(setSystemHealth);
+    const interval = setInterval(checkSystemHealth, 20000);
+    return () => {
+      unsub();
+      clearInterval(interval);
+    };
+  }, []);
+
+  return (
+    <main className="min-h-screen bg-[#FAF7F2] text-[#302B30] selection:bg-[#D26A50]/20 selection:text-[#302B30] relative overflow-x-clip flex flex-col justify-between">
+      {/* Signature Connected Network Grid Background */}
+      <NetworkGridBackground />
+
+      {/* Top Navigation Bar */}
+      <TopNavbar
+        principal={null}
+        isSignedIn={false}
+        systemHealth={systemHealth}
+        isAuthorized={false}
+        organizationName="Workspace"
+        isClerkConfigured={false}
+      />
+
+      {/* Public Landing Experience */}
+      <div className="relative z-10 flex-1 min-h-[calc(100vh-140px)]">
+        <PublicLandingExperience isClerkConfigured={false} />
+      </div>
+
+      <Footer />
     </main>
   );
+}
+
+export default function HomePage() {
+  const clerkConfigured = isClerkConfigured();
+
+  if (!clerkConfigured) {
+    return <UnconfiguredLandingApp />;
+  }
+
+  return <ClerkAuthenticatedApp />;
 }
