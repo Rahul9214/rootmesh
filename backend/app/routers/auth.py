@@ -5,6 +5,8 @@ Exposes token acquisition, dev token issuance, and principal identity inspection
 from __future__ import annotations
 
 import logging
+import os
+import secrets
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -41,9 +43,36 @@ async def acquire_token(req: LoginRequest):
     """
     Authenticate principal against authorized directory and issue signed JWT.
     Enforces signature, expiration, audience, and tenant binding.
+    Strictly disabled in production mode.
     """
+    if settings.is_production:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Legacy password token issuance is disabled in production mode.",
+        )
+
     user = AUTHORIZED_USERS.get(req.username)
-    if not user or user["secret"] != req.secret:
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Invalid username or credentials.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Development credentials must be explicitly configured via environment variables
+    # (e.g. ROOTMESH_SECRET_ALEX_RIVERA, ROOTMESH_SECRET_SARAH_CHEN).
+    # Fails closed if the environment variable is absent or empty.
+    env_secret_key = f"ROOTMESH_SECRET_{req.username.upper().replace('.', '_')}"
+    expected_secret = os.getenv(env_secret_key)
+
+    if not expected_secret or not expected_secret.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication failed: Invalid username or credentials.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not req.secret or not req.secret.strip() or not secrets.compare_digest(expected_secret, req.secret):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication failed: Invalid username or credentials.",
@@ -79,36 +108,18 @@ async def acquire_token(req: LoginRequest):
 @router.post("/dev-token", response_model=TokenResponse)
 async def generate_development_token(req: DevTokenRequest):
     """
-    Issues verified JWT for authorized local development and testing workflows.
-    Binds caller to verified tenant context without weakening production enforcement.
-    Strictly prohibited and disabled under production mode.
+    Emergency lockdown: HTTP development token issuance is disabled by default.
+    Callers must authenticate via /token with configured credentials or an external IdP.
+    Internal generate_dev_token() Python helper remains available for backend tests.
     """
     if settings.is_production:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden: Development token issuance is strictly disabled in production mode.",
         )
-
-    if req.tenant_id not in settings.authorized_tenants:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Tenant '{req.tenant_id}' is not authorized on this RootMesh node.",
-        )
-
-    token = generate_dev_token(
-        username=req.username,
-        tenant_id=req.tenant_id,
-        roles=req.roles,
-    )
-
-    from app.security.auth import verify_access_token
-    principal = verify_access_token(token)
-
-    return TokenResponse(
-        access_token=token,
-        token_type="Bearer",
-        expires_in=settings.jwt_expiration_minutes * 60,
-        principal=principal,
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Forbidden: Unauthenticated development token issuance over HTTP is disabled.",
     )
 
 

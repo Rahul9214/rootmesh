@@ -10,10 +10,13 @@ import pytest
 import requests
 from falkordb import FalkorDB
 
-FALKOR_HOST = "localhost"
-FALKOR_PORT = 6379
-FALKOR_PASSWORD = ""
-TENANT_ID = "sec_ops_tenant_alpha"
+import json
+import os
+
+FALKOR_HOST = os.getenv("FALKOR_HOST", "localhost")
+FALKOR_PORT = int(os.getenv("FALKOR_PORT", "6380"))
+FALKOR_PASSWORD = os.getenv("FALKOR_PASSWORD", "")
+TENANT_ID = os.getenv("TENANT_ID", "sec_ops_tenant_alpha")
 API_BASE = "http://localhost:8000"
 SLA_MAX_MS = 50.0
 
@@ -109,10 +112,19 @@ def test_shortest_path_execution(falkor_graph):
 
 def test_monte_carlo_udf_execution(falkor_graph):
     """Verify embedded FalkorDB JavaScript UDF 'blast_radius' execution."""
-    cypher = "RETURN blast_radius_lib.blast_radius('host-0', 100) AS result"
+    runs = 100
+    cypher = f"MATCH (h:Host {{id: 'host-0'}}) RETURN blast_radius_lib.blast_radius(h, {runs}) AS result"
     res = falkor_graph.ro_query(cypher).result_set
     assert len(res) == 1
     assert res[0][0] is not None
+    data = res[0][0]
+    counts = json.loads(data) if isinstance(data, str) else data
+    assert isinstance(counts, dict), f"Expected dict of infection counts, got {type(counts)}"
+    assert len(counts) > 0, "Expected nonempty dictionary of infection counts"
+    for host_name, count in counts.items():
+        assert isinstance(host_name, str) and len(host_name) > 0, f"Invalid host name: {host_name}"
+        assert isinstance(count, int), f"Infection count must be int, got {type(count)}"
+        assert 0 <= count <= runs, f"Count {count} out of bounds [0, {runs}]"
 
 
 def test_finding_memory_persistence_and_cross_session_recall(falkor_graph):

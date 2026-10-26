@@ -4,6 +4,7 @@ Tests: Tool catalog, parameter validation, bounds checking, and read-only safety
 """
 from __future__ import annotations
 
+import json
 import pytest
 from app.mcp_server import mcp_app
 
@@ -108,11 +109,23 @@ async def test_mcp_triage_host():
 
 @pytest.mark.asyncio
 async def test_mcp_blast_radius():
-    """Verify Monte Carlo UDF tool execution and parameter bounds clamping."""
+    """Verify Monte Carlo UDF tool execution, response schema, and distribution counts."""
+    runs = 100
     res = await mcp_app.call_tool(
         "falkordb_blast_radius",
-        {"tenant_id": TENANT_ID, "patient_zero_id": "host-0", "simulation_runs": 100},
+        {"tenant_id": TENANT_ID, "patient_zero_id": "host-0", "simulation_runs": runs},
     )
     text = _extract_text(res)
     assert text is not None
-    assert "ERROR" not in text
+    data = json.loads(text) if isinstance(text, str) else text
+    assert data.get("status") == "success", f"Expected status 'success', got: {data}"
+    assert data.get("patient_zero") == "host-0"
+    assert data.get("simulation_runs") == runs
+    assert data.get("tenant_id") == TENANT_ID
+    infection_dist = data.get("infection_distribution")
+    assert isinstance(infection_dist, dict), f"Expected dict for infection_distribution, got {type(infection_dist)}"
+    assert len(infection_dist) > 0, "Expected nonempty infection_distribution dictionary"
+    for host_name, count in infection_dist.items():
+        assert isinstance(host_name, str) and len(host_name) > 0, f"Invalid host name: {host_name}"
+        assert isinstance(count, int), f"Infection count must be int, got {type(count)}"
+        assert 0 <= count <= runs, f"Count {count} out of bounds [0, {runs}]"

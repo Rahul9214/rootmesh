@@ -2,20 +2,27 @@
 // Registered in FalkorDB via db.udf_load
 // Language: JavaScript (FalkorDB v6 UDF API)
 
-function blast_radius(start_node_id, runs) {
+function blast_radius(start_node, runs) {
   var infectedCounts = {};
-  var it = graph.iterateNodes('Host');
   var startNode = null;
-  var step = it.next();
-  while (!step.done) {
-    if (step.value.attributes && step.value.attributes.id === start_node_id) {
-      startNode = step.value;
-      break;
+
+  // Resolve starting Host node: direct Node object from Cypher or safe iterator fallback
+  if (start_node && typeof start_node === 'object') {
+    startNode = start_node;
+  } else if (typeof start_node === 'string' && typeof graph !== 'undefined' && typeof graph.iterateNodes === 'function') {
+    var it = graph.iterateNodes('Host');
+    var step = it.next();
+    while (!step.done) {
+      if (step.value.attributes && step.value.attributes.id === start_node) {
+        startNode = step.value;
+        break;
+      }
+      step = it.next();
     }
-    step = it.next();
   }
-  if (!startNode) {
-    return JSON.stringify({ error: "Host node not found", start_node_id: start_node_id });
+
+  if (!startNode || typeof startNode !== 'object') {
+    return JSON.stringify({ error: "Host node not found", start_node: start_node });
   }
 
   var numRuns = parseInt(runs, 10) || 100;
@@ -26,9 +33,13 @@ function blast_radius(start_node_id, runs) {
 
     while (frontier.length > 0) {
       var curr = frontier.shift();
-      var trav = graph.traverse([curr], { direction: 'outgoing' });
-      if (trav && trav.length > 0) {
-        var neighbors = trav[0];
+      var neighbors = (typeof curr.getNeighbors === 'function')
+        ? curr.getNeighbors({ direction: 'outgoing' })
+        : ((typeof graph !== 'undefined' && typeof graph.traverse === 'function')
+            ? (graph.traverse([curr], { direction: 'outgoing' })[0] || [])
+            : []);
+
+      if (neighbors && neighbors.length > 0) {
         for (var j = 0; j < neighbors.length; j++) {
           var neighbor = neighbors[j];
           if (!neighbor || !neighbor.attributes || visited[neighbor.id]) continue;
