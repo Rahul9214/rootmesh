@@ -36,6 +36,7 @@ import {
   onAuthStateChanged,
   authenticatedFetch,
   isClerkConfigured,
+  isDevPreviewAllowed,
   type PrincipalInfo,
 } from "@/lib/auth";
 import {
@@ -68,9 +69,10 @@ interface TopNavbarProps {
   isAuthorized: boolean;
   organizationName?: string;
   isClerkConfigured?: boolean;
+  isPreview?: boolean;
 }
 
-function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organizationName, isClerkConfigured = true }: TopNavbarProps) {
+function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organizationName, isClerkConfigured = true, isPreview = false }: TopNavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
@@ -109,7 +111,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
             {/* Engine Connectivity Status (Desktop Badge) */}
             <div className="hidden sm:inline-flex">
               {systemHealth.status === "operational" ? (
-                isAuthorized ? (
+                isAuthorized && !isPreview ? (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#E8F2EC] text-[#26694E] border border-[#C5DFD0] font-medium whitespace-nowrap">
                     <span className="w-1.5 h-1.5 rounded-full bg-[#26694E] animate-pulse inline-block" />
                     <span>Connected</span>
@@ -146,7 +148,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
                 }`}
                 title={
                   systemHealth.status === "operational"
-                    ? isAuthorized
+                    ? isAuthorized && !isPreview
                       ? "Connected"
                       : "Engine Online"
                     : systemHealth.status === "degraded"
@@ -155,7 +157,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
                 }
                 aria-label={
                   systemHealth.status === "operational"
-                    ? isAuthorized
+                    ? isAuthorized && !isPreview
                       ? "Connected"
                       : "Engine Online"
                     : systemHealth.status === "degraded"
@@ -166,7 +168,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
                 <span
                   className={`w-2 h-2 rounded-full ${
                     systemHealth.status === "operational"
-                      ? isAuthorized
+                      ? isAuthorized && !isPreview
                         ? "bg-[#26694E] animate-pulse"
                         : "bg-[#26694E]"
                       : systemHealth.status === "degraded"
@@ -177,8 +179,8 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
               </span>
             </div>
 
-            {/* Authorized Workspace Friendly Pill (Desktop) */}
-            {isAuthorized && (
+            {/* Authorized Workspace Friendly Pill (Desktop) - strictly for verified authorized tenant */}
+            {isAuthorized && !isPreview && principal?.tenant_id && (
               <span
                 className="hidden md:inline-flex items-center gap-1.5 text-[#82465D] bg-[#F6EDF1] px-2.5 py-1 rounded-md border border-[#E5CDD8] font-bold whitespace-nowrap"
                 title={principal?.tenant_id ? `Authenticated Tenant: ${principal.tenant_id}` : undefined}
@@ -188,8 +190,19 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
               </span>
             )}
 
+            {/* Unverified Local Simulation Badge */}
+            {isPreview && (
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#FFF8E6] text-[#B87A14] border border-[#F5E0B8] font-mono text-xs font-semibold whitespace-nowrap"
+                title="Development Preview Simulation (Unverified): zero tenant authorization or backend access"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#B87A14] inline-block" />
+                <span>Local Dev Simulation (Unverified)</span>
+              </span>
+            )}
+
             {/* Unauthenticated Walkthrough Nav Link */}
-            {!isSignedIn && (
+            {!isSignedIn && !isPreview && (
               <a
                 href="#product-walkthrough"
                 className="hidden sm:inline-flex items-center gap-1 text-[#645C64] hover:text-[#302B30] hover:bg-[#EEE6DC] px-2.5 py-1.5 min-h-[32px] rounded-md transition-colors border border-transparent hover:border-[#DFD6C9] whitespace-nowrap"
@@ -198,8 +211,8 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
               </a>
             )}
 
-            {/* Clerk Controls */}
-            {isSignedIn ? (
+            {/* Clerk Controls - exclusively for genuine Clerk authenticated sessions */}
+            {isSignedIn && !isPreview ? (
               <div className="flex items-center gap-1.5 sm:gap-2">
                 <OrganizationSwitcher
                   hidePersonal={false}
@@ -224,8 +237,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
                   }}
                 />
               </div>
-            ) : (
-              isClerkConfigured ? (
+            ) : isClerkConfigured ? (
               <SignInButton mode="modal">
                 <button
                   type="button"
@@ -244,7 +256,6 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
                 <span aria-hidden="true">🔒</span>
                 <span>Auth Unavailable</span>
               </span>
-            )
             )}
 
             {/* Desktop Secondary Link: API Docs */}
@@ -283,19 +294,26 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
           id="mobile-nav-overflow-menu"
           className="sm:hidden border-t border-[#DFD6C9] bg-[#FAF7F2] px-4 py-3 space-y-2.5 shadow-warm-md"
         >
-          {isAuthorized && (
+          {isAuthorized && !isPreview && principal?.tenant_id && (
             <div className="flex items-center justify-between text-xs font-mono py-1 border-b border-[#EEE6DC]">
               <span className="text-[#645C64]">Active Workspace:</span>
               <div className="text-right">
                 <span className="font-bold text-[#82465D] bg-[#F6EDF1] px-2 py-0.5 rounded border border-[#E5CDD8]">
                   {organizationName || "Workspace"}
                 </span>
-                {principal?.tenant_id && (
-                  <span className="block text-[9px] text-[#928992] mt-0.5">
-                    ID: {principal.tenant_id}
-                  </span>
-                )}
+                <span className="block text-[9px] text-[#928992] mt-0.5">
+                  ID: {principal?.tenant_id}
+                </span>
               </div>
+            </div>
+          )}
+
+          {isPreview && (
+            <div className="flex items-center justify-between text-xs font-mono py-1 border-b border-[#EEE6DC]">
+              <span className="text-[#645C64]">Environment:</span>
+              <span className="font-bold text-[#B87A14] bg-[#FFF8E6] px-2 py-0.5 rounded border border-[#F5E0B8]">
+                Local Dev Simulation (Unverified)
+              </span>
             </div>
           )}
 
@@ -313,7 +331,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   systemHealth.status === "operational"
-                    ? isAuthorized
+                    ? isAuthorized && !isPreview
                       ? "bg-[#26694E] animate-pulse"
                       : "bg-[#26694E]"
                     : systemHealth.status === "degraded"
@@ -323,7 +341,7 @@ function TopNavbar({ principal, isSignedIn, systemHealth, isAuthorized, organiza
               />
               <span>
                 {systemHealth.status === "operational"
-                  ? isAuthorized
+                  ? isAuthorized && !isPreview
                     ? "Connected"
                     : "Engine Online"
                   : systemHealth.status === "degraded"
@@ -985,33 +1003,36 @@ function ClerkAuthenticatedApp() {
     }));
   }, []);
 
-  // Authentication & Authorization Boundaries
+  // Authentication & Authorization Boundaries (Preview Strictly Disabled in Production)
   const [isPreview, setIsPreview] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    // Preview mode is strictly forbidden in production builds and requires explicit opt-in in local dev on loopback
+    if (typeof window !== "undefined" && isDevPreviewAllowed(window.location.hostname)) {
       const params = new URLSearchParams(window.location.search);
       if (params.get("preview") === "1" || params.get("preview") === "true" || params.get("eval") === "1") {
         setIsPreview(true);
+        // Dev-only presentation principal: zero verified tenant identity, zero RBAC permissions, zero backend access
         setPrincipal((prev) =>
           prev || {
-            principal_id: "preview-analyst",
-            username: "Lead Incident Responder",
-            email: "analyst@rootmesh.security",
-            tenant_id: "tenant-rootmesh",
-            roles: ["Security Analyst"],
-            permissions: ["incident:investigate", "incident:propose"],
-            workspaces: ["ws-production"],
+            principal_id: "dev-preview-viewer",
+            username: "Dev Preview (Unauthenticated)",
+            email: "preview@local.dev",
+            tenant_id: "",
+            roles: [],
+            permissions: [],
+            workspaces: [],
           }
         );
       }
     }
   }, []);
 
-  const isAuthorized = isPreview || Boolean(isSignedIn && organization && principal?.tenant_id);
+  // Verified Clerk authorization (strictly requires authenticated Clerk session, selected org, and mapped tenant)
+  const isAuthorized = Boolean(isSignedIn && organization && principal?.tenant_id);
   const isNoOrg = !isPreview && Boolean(isSignedIn && !organization);
   const isUnauthorizedOrg = !isPreview && Boolean(isSignedIn && organization && principal && !principal.tenant_id);
-  const organizationName = organization?.name || (isPreview ? "RootMesh SecOps" : "Workspace");
+  const organizationName = organization?.name || "Workspace";
 
   return (
     <main className="min-h-screen bg-[#FAF7F2] text-[#302B30] selection:bg-[#D26A50]/20 selection:text-[#302B30] relative overflow-x-clip flex flex-col justify-between">
@@ -1021,11 +1042,12 @@ function ClerkAuthenticatedApp() {
       {/* ── Top Navigation Bar ────────────────────────────────────────── */}
       <TopNavbar
         principal={principal}
-        isSignedIn={Boolean(isSignedIn || isPreview)}
+        isSignedIn={Boolean(isSignedIn)}
         systemHealth={systemHealth}
         isAuthorized={isAuthorized}
         organizationName={organizationName}
         isClerkConfigured={true}
+        isPreview={isPreview}
       />
 
       {/* ── Conditional Authentication States ─────────────────────────── */}
@@ -1041,6 +1063,21 @@ function ClerkAuthenticatedApp() {
       ) : (
         /* ── Authorized Operational Workspace (Sections 1 through 7) ──── */
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-12">
+          {isPreview && (
+            <div
+              role="status"
+              className="p-3.5 rounded-xl bg-[#FFF8E6] border border-[#F5E0B8] text-[#8F5B05] text-xs font-mono flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-warm-xs"
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[#B87A14] flex-shrink-0" />
+                <span className="font-bold">LOCAL DEV SIMULATION (UNVERIFIED):</span>
+                <span>Presentation preview only. Zero tenant authorization, zero RBAC roles, zero backend access.</span>
+              </div>
+              <span className="self-start sm:self-auto text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-[#FAF7F2] border border-[#F5E0B8] text-[#B87A14]">
+                Presentation Only
+              </span>
+            </div>
+          )}
           {/* Section 1: Operations Command Center */}
           <section id="investigation-workspace" aria-label="Operations Command Center" className="scroll-mt-20 space-y-4">
             <div>

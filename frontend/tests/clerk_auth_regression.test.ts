@@ -14,6 +14,7 @@ import {
   setClerkLoaded,
   isClerkLoaded,
   isClerkConfigured,
+  isDevPreviewAllowed,
   resetAuthStateForTesting,
   refreshBackendPrincipal,
   syncClerkSession,
@@ -737,5 +738,117 @@ describe("RootMesh Clerk Authentication Lifecycle & Regression Suite", () => {
     assert.ok(pageSrc.includes("syncClerkSession"), "Must preserve session synchronization with backend");
     assert.ok(pageSrc.includes("onAuthStateChanged"), "Must preserve authenticated principal subscription");
     assert.ok(pageSrc.includes("isClerkConfigured={true}"), "ClerkAuthenticatedApp must explicitly pass configured mode");
+  });
+
+  test("PR #9 Security Hardening: isDevPreviewAllowed strictly enforces production denial, loopback restriction, and explicit opt-in", () => {
+    const origNodeEnv = process.env.NODE_ENV;
+    const origDevPreview = process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW;
+    const origAllowPreview = process.env.NEXT_PUBLIC_ALLOW_DEV_PREVIEW;
+
+    try {
+      // 1. Production Denial: Preview is unconditionally forbidden even with opt-in and localhost hostname
+      (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+      process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW = "true";
+      process.env.NEXT_PUBLIC_ALLOW_DEV_PREVIEW = "true";
+      assert.strictEqual(isDevPreviewAllowed("localhost"), false, "Production must strictly deny preview on localhost");
+      assert.strictEqual(isDevPreviewAllowed("127.0.0.1"), false, "Production must strictly deny preview on 127.0.0.1");
+      assert.strictEqual(isDevPreviewAllowed(), false, "Production must deny preview without hostname");
+
+      // 2. Non-development Denial: Any environment other than 'development' (e.g. test) must fail-closed
+      (process.env as Record<string, string | undefined>).NODE_ENV = "test";
+      assert.strictEqual(isDevPreviewAllowed("localhost"), false, "Test environment must strictly deny preview");
+
+      // 3. Missing or Disabled Opt-In in Development:
+      (process.env as Record<string, string | undefined>).NODE_ENV = "development";
+      delete process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW;
+      delete process.env.NEXT_PUBLIC_ALLOW_DEV_PREVIEW;
+      assert.strictEqual(isDevPreviewAllowed("localhost"), false, "Development must deny preview without explicit opt-in");
+
+      process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW = "false";
+      assert.strictEqual(isDevPreviewAllowed("localhost"), false, "Development must deny preview when flag is false");
+
+      process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW = "";
+      assert.strictEqual(isDevPreviewAllowed("localhost"), false, "Development must deny preview when flag is empty");
+
+      // 4. Non-Loopback Hostname Denial in Development (Even with opt-in enabled):
+      process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW = "true";
+      assert.strictEqual(isDevPreviewAllowed("rootmesh.security"), false, "Must deny preview on non-loopback domain");
+      assert.strictEqual(isDevPreviewAllowed("192.168.1.100"), false, "Must deny preview on private LAN IP");
+      assert.strictEqual(isDevPreviewAllowed("10.0.0.1"), false, "Must deny preview on class A private IP");
+      assert.strictEqual(isDevPreviewAllowed("example.com"), false, "Must deny preview on public domain");
+      assert.strictEqual(isDevPreviewAllowed(""), false, "Must deny preview on empty hostname");
+      assert.strictEqual(isDevPreviewAllowed(undefined), false, "Must deny preview on undefined hostname (SSR)");
+
+      // 5. Localhost / 127.0.0.1 Development Opt-In Permitted:
+      assert.strictEqual(isDevPreviewAllowed("localhost"), true, "Development permits preview on localhost with opt-in");
+      assert.strictEqual(isDevPreviewAllowed("127.0.0.1"), true, "Development permits preview on 127.0.0.1 with opt-in");
+
+      process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW = "1";
+      assert.strictEqual(isDevPreviewAllowed("localhost"), true, "Development permits preview with flag=1");
+
+      delete process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW;
+      process.env.NEXT_PUBLIC_ALLOW_DEV_PREVIEW = "true";
+      assert.strictEqual(isDevPreviewAllowed("localhost"), true, "Development permits preview with allow flag");
+    } finally {
+      (process.env as Record<string, string | undefined>).NODE_ENV = origNodeEnv;
+      if (origDevPreview !== undefined) {
+        process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW = origDevPreview;
+      } else {
+        delete process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW;
+      }
+      if (origAllowPreview !== undefined) {
+        process.env.NEXT_PUBLIC_ALLOW_DEV_PREVIEW = origAllowPreview;
+      } else {
+        delete process.env.NEXT_PUBLIC_ALLOW_DEV_PREVIEW;
+      }
+    }
+  });
+
+  test("PR #9 Security Hardening: Preview query parameters cannot activate operational dashboard or synthetic principal in production", () => {
+    const pageSrc = fs.readFileSync(path.join(process.cwd(), "app", "page.tsx"), "utf8");
+
+    // Must import and invoke isDevPreviewAllowed with loopback window hostname
+    assert.ok(pageSrc.includes("isDevPreviewAllowed"), "page.tsx must import isDevPreviewAllowed");
+    assert.ok(pageSrc.includes("isDevPreviewAllowed(window.location.hostname)"), "page.tsx must pass window.location.hostname to isDevPreviewAllowed");
+
+    // Strict separation: isAuthorized must strictly depend on verified Clerk state, NEVER isPreview
+    assert.ok(pageSrc.includes("const isAuthorized = Boolean(isSignedIn && organization && principal?.tenant_id);"), "isAuthorized must strictly require genuine Clerk auth, org, and tenant");
+    assert.ok(!pageSrc.includes("isAuthorized = isPreview ||"), "isAuthorized must NEVER conflate isPreview");
+
+    // TopNavbar must receive genuine isSignedIn boolean, not (isSignedIn || isPreview)
+    assert.ok(pageSrc.includes("isSignedIn={Boolean(isSignedIn)}"), "TopNavbar must receive genuine isSignedIn state");
+
+    // Must never assign fake tenant or RBAC privileges to dev-preview principal
+    assert.ok(!pageSrc.includes('"tenant-rootmesh"'), "page.tsx must not assign synthetic tenant-rootmesh");
+    assert.ok(!pageSrc.includes('"ws-production"'), "page.tsx must not assign production workspace in preview");
+    assert.ok(pageSrc.includes('tenant_id: ""'), "dev-preview principal must have empty tenant_id");
+    assert.ok(pageSrc.includes("roles: []"), "dev-preview principal must have zero RBAC roles");
+    assert.ok(pageSrc.includes("permissions: []"), "dev-preview principal must have zero RBAC permissions");
+    assert.ok(pageSrc.includes("workspaces: []"), "dev-preview principal must have zero workspaces");
+
+    // TopNavbar must not display OrganizationSwitcher to preview viewer
+    assert.ok(pageSrc.includes("isSignedIn && !isPreview ? ("), "OrganizationSwitcher and UserButton must be hidden during preview");
+
+    // TopNavbar must clearly label preview state as unverified local simulation
+    assert.ok(pageSrc.includes("Development Preview Simulation (Unverified)"), "TopNavbar tooltip must label preview unverified simulation");
+    assert.ok(pageSrc.includes("Local Dev Simulation (Unverified)"), "TopNavbar badge must label preview local dev simulation");
+
+    // Operational dashboard must render prominent presentation-only banner
+    assert.ok(pageSrc.includes("LOCAL DEV SIMULATION (UNVERIFIED):"), "Dashboard must render local dev simulation banner in preview");
+    assert.ok(pageSrc.includes("Presentation Only"), "Dashboard banner must explicitly declare Presentation Only");
+  });
+
+  test("PR #9 Security Hardening: Public landing-page walkthrough remains fully functional and accessible without preview access", () => {
+    const landingSrc = fs.readFileSync(path.join(process.cwd(), "components", "PublicLandingExperience.tsx"), "utf8");
+    const walkthroughSrc = fs.readFileSync(path.join(process.cwd(), "components", "ProductWalkthroughReplay.tsx"), "utf8");
+
+    // PublicLandingExperience must feature interactive walkthrough link
+    assert.ok(landingSrc.includes('href="#product-walkthrough"'), "Public landing must provide anchor link to walkthrough");
+    assert.ok(landingSrc.includes("<ProductWalkthroughReplay />") || landingSrc.includes("<ProductWalkthroughReplay"), "Public landing must render ProductWalkthroughReplay");
+
+    // Walkthrough replay must operate completely client-side without backend calls
+    assert.ok(walkthroughSrc.includes("Asset Selected"), "Walkthrough must contain 5 stages");
+    assert.ok(walkthroughSrc.includes("Human Review Required"), "Walkthrough must explain human governance");
+    assert.ok(!walkthroughSrc.includes("fetch("), "Walkthrough must not trigger network requests");
   });
 });

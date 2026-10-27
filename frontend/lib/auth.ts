@@ -81,6 +81,30 @@ export function setClerkLoaded(loaded: boolean): void {
 }
 
 /**
+ * Checks whether client-side preview/eval access is allowed.
+ * Strictly forbidden in production environments (fail-closed).
+ * In local development (non-production), requires an explicit opt-in environment flag:
+ * NEXT_PUBLIC_ENABLE_DEV_PREVIEW=true or NEXT_PUBLIC_ALLOW_DEV_PREVIEW=true.
+ */
+export function isDevPreviewAllowed(hostname?: string): boolean {
+  if (process.env.NODE_ENV !== "development") {
+    return false;
+  }
+  const hasOptIn = Boolean(
+    process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW === "true" ||
+    process.env.NEXT_PUBLIC_ENABLE_DEV_PREVIEW === "1" ||
+    process.env.NEXT_PUBLIC_ALLOW_DEV_PREVIEW === "true"
+  );
+  if (!hasOptIn) {
+    return false;
+  }
+  const host = hostname !== undefined
+    ? hostname
+    : (typeof window !== "undefined" ? window.location.hostname : "");
+  return host === "localhost" || host === "127.0.0.1";
+}
+
+/**
  * Checks whether Clerk publishable credentials are configured in the environment.
  */
 export function isClerkConfigured(): boolean {
