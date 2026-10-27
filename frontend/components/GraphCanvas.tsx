@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { authenticatedFetch } from "@/lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const TENANT_ID = "sec_ops_tenant_alpha";
 
 interface GraphNode {
   id: string;
@@ -60,12 +59,14 @@ export interface GraphCanvasProps {
   selectedAssetId?: string;
   isContained?: boolean;
   onSelectNode?: (nodeId: string) => void;
+  tenantId?: string;
 }
 
 export const GraphCanvas: React.FC<GraphCanvasProps> = ({
   selectedAssetId = "host-0",
   isContained = false,
   onSelectNode,
+  tenantId,
 }) => {
   const [nodes, setNodes] = useState<GraphNode[]>(TOPOLOGY_NODES);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
@@ -78,14 +79,14 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
     }
   }, [selectedAssetId, nodes]);
 
-  // Synchronize containment state
+  // Synchronize containment state without clobbering non-target node statuses
   useEffect(() => {
     setNodes((prev) =>
       prev.map((n) => {
         if (n.id === (selectedAssetId || "host-0")) {
           return {
             ...n,
-            status: isContained ? "CONTAINED" : "INFECTED",
+            status: isContained ? "CONTAINED" : n.status,
           };
         }
         return n;
@@ -105,7 +106,8 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
 
   // Fetch PageRank scores from live FalkorDB
   useEffect(() => {
-    authenticatedFetch(`${API_BASE}/api/v1/threat/pagerank/${TENANT_ID}`)
+    if (!tenantId) return;
+    authenticatedFetch(`${API_BASE}/api/v1/threat/pagerank/${tenantId}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((data: Array<{ host_name: string; score: number }>) => {
         const map: Record<string, number> = {};
@@ -115,11 +117,12 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         setPageRankMap(map);
       })
       .catch(() => {});
-  }, []);
+  }, [tenantId]);
 
   // Fetch live topology to update node status (contained / infected)
   useEffect(() => {
-    authenticatedFetch(`${API_BASE}/api/v1/threat/topology/${TENANT_ID}`)
+    if (!tenantId) return;
+    authenticatedFetch(`${API_BASE}/api/v1/threat/topology/${tenantId}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((data: Array<{ id: string; status: "SAFE" | "INFECTED" | "CONTAINED" }>) => {
         if (data && data.length > 0) {
@@ -132,7 +135,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
         }
       })
       .catch(() => {});
-  }, []);
+  }, [tenantId]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).tagName !== "circle" && (e.target as HTMLElement).tagName !== "text") {
@@ -335,10 +338,15 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
 
               let fillColor = "#FFFFFF";
               let strokeColor = "#DFD6C9";
+              const isTargetHost = node.id === (selectedAssetId || "host-0");
+              const isHistoricalSim = node.status === "CONTAINED" && isTargetHost && !isContained;
 
               if (node.status === "INFECTED") {
                 fillColor = "#FBF0ED";
                 strokeColor = "#D26A50";
+              } else if (isHistoricalSim) {
+                fillColor = "#FDF5E8";
+                strokeColor = "#E6A548";
               } else if (node.status === "CONTAINED") {
                 fillColor = "#F6EDF1";
                 strokeColor = "#82465D";
@@ -423,13 +431,13 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                     textAnchor="middle"
                     fontSize="9.5"
                     fontFamily="monospace"
-                    fill="#645C64"
+                    fill={isHistoricalSim ? "#A06316" : "#645C64"}
                     stroke="#FAF7F2"
                     strokeWidth="2.5"
                     paintOrder="stroke"
-                    className="select-none"
+                    className="select-none font-medium"
                   >
-                    {node.id} · {node.ip}
+                    {node.id} · {node.ip}{isHistoricalSim ? " (Prior Sim)" : ""}
                   </text>
 
                   {/* PageRank Score Badge if enabled */}
@@ -475,8 +483,12 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
             <span>Patient Zero (Infected)</span>
           </span>
           <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FDF5E8] border-2 border-[#E6A548]" />
+            <span>Contained (Prior Sim)</span>
+          </span>
+          <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[#F6EDF1] border-2 border-[#82465D]" />
-            <span>Contained (Sim)</span>
+            <span>Contained (Verified)</span>
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-[#FDF5E8] border-2 border-[#E6A548]" />
@@ -523,12 +535,18 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                     className={
                       selectedNode.status === "INFECTED"
                         ? "text-[#C24128]"
+                        : selectedNode.status === "CONTAINED" && selectedNode.id === (selectedAssetId || "host-0") && !isContained
+                        ? "text-[#A06316]"
                         : selectedNode.status === "CONTAINED"
                         ? "text-[#82465D]"
                         : "text-[#26694E]"
                     }
                   >
-                    {selectedNode.status}
+                    {selectedNode.status === "CONTAINED" && selectedNode.id === (selectedAssetId || "host-0") && !isContained
+                      ? "CONTAINED (PRIOR SIMULATION)"
+                      : selectedNode.status === "CONTAINED" && isContained
+                      ? "CONTAINED (VERIFIED)"
+                      : selectedNode.status}
                   </strong>
                 </div>
               </div>

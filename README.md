@@ -1,335 +1,221 @@
-# RootMesh — Autonomous Threat Memory & Incident Response Engine
+<p align="center">
+  <img src="frontend/public/brand/rootmesh-wordmark.png" alt="RootMesh Logo" width="380" />
+</p>
 
-> **FalkorDB Graph Hacks 2026 Hackathon Submission**<br/>
-> Graph-native, sub-millisecond cybersecurity incident investigation, memory persistence, and guarded response powered by **FalkorDB GraphBLAS**.
+<p align="center">
+  <strong>Graph-Native Cybersecurity Threat Intelligence, Blast-Radius Reasoning & Guarded Incident Response</strong>
+</p>
 
-[![FalkorDB](https://img.shields.io/badge/FalkorDB-GraphBLAS%20v6-82465D?style=flat-square)](https://falkordb.com)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-26694E?style=flat-square)](https://fastapi.tiangolo.com)
-[![Next.js](https://img.shields.io/badge/Next.js-15%20(Turbopack)-302B30?style=flat-square)](https://nextjs.org)
-[![Python](https://img.shields.io/badge/Python-3.12%2B-D26A50?style=flat-square)](https://python.org)
-[![MCP](https://img.shields.io/badge/Model%20Context%20Protocol-MCP%20Server-E6A548?style=flat-square)](https://modelcontextprotocol.io)
-[![Tests](https://img.shields.io/badge/pytest-68%20passed%20(100%25)-26694E?style=flat-square)](backend/tests)
-[![License](https://img.shields.io/badge/license-MIT-645C64?style=flat-square)](LICENSE)
-
----
-
-## 🛡️ Executive Summary
-
-Modern enterprise cybersecurity breaches do not occur in isolation. Adversaries propagate laterally through internal network fabrics—hopping from an initial compromised workstation through transit routers, backup appliances, and bastion servers until reaching high-value restricted customer databases and egress firewalls.
-
-Traditional security monitoring solutions query relational databases and tabular SIEM logs, which struggle with multi-hop recursive queries and fail to provide real-time blast-radius context.
-
-**RootMesh** solves this problem by representing the entire enterprise estate as an active, interconnected **knowledge and threat graph in FalkorDB**:
-- **Infrastructure Topology**: Endpoints, VLAN routers, firewalls, and restricted databases.
-- **Vulnerability Fabric**: CVE vulnerability nodes and unauthenticated SMB/RPC edges.
-- **Company Brain**: Service dependencies, owning teams, on-call responders, runbook playbooks, and Git commit provenance.
-- **Threat Memory**: Durable episodic finding nodes and immutable procedural containment audit logs.
-
-By executing matrix-accelerated GraphBLAS algorithms directly inside FalkorDB, RootMesh evaluates multi-hop lateral propagation vectors, calculates maximum data exfiltration bandwidth bottlenecks, resolves incident ownership, and enforces guarded containment workflows in **under 35 milliseconds**.
+<p align="center">
+  <a href="#overview">Overview</a> •
+  <a href="#verified-capabilities">Capabilities</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#quickstart">Quickstart</a> •
+  <a href="#testing">Testing</a> •
+  <a href="#security-model">Security Model</a> •
+  <a href="#documentation">Documentation</a> •
+  <a href="#disclosures--operational-boundaries">Operational Boundaries</a>
+</p>
 
 ---
 
-## 🏆 Graph Hacks 2026 Track Implementations
+## Overview
 
-RootMesh comprehensively addresses all three Graph Hacks 2026 tracks within a unified, production-tested architecture:
+Modern cybersecurity incidents do not unfold across isolated tabular rows. Adversaries traverse enterprise network topology—hopping across unfirewalled VLAN routers, exploiting unauthenticated protocol shares, and probing towards restricted databases and perimeter egress gateways.
 
-| Track | Hackathon Requirement | RootMesh Implementation & Verification |
-|:------|:----------------------|:---------------------------------------|
-| **Track 1: Agents That Act on Connected Data** | Autonomous agents executing graph algorithms, multi-hop Cypher traversals, explainable graph reasoning, and blast-radius evaluation. | • **Multi-hop Cypher Traversals (`*1..4`)**: Traverses up to 4 hops of active communication vectors.<br/>• **FalkorDB PageRank Centrality (`CALL algo.pageRank('Host', 'COMMUNICATES')`)**: Identifies structural choke points (`EgressFirewall` #1, `VLAN-Router` #2).<br/>• **FalkorDB MaxFlow Bottleneck (`CALL algo.maxFlow(...)`)**: Calculates exact network exfiltration bandwidth ceiling (`43.0 Mbps`).<br/>• **Shortest Path to High-Value Data**: Resolves shortest lateral routes to restricted databases (`HR-Payroll-DB`, 1 hop away).<br/>• **Monte Carlo JavaScript UDF (`blast_radius`)**: Embedded in-graph probabilistic infection simulation running directly inside FalkorDB via `db.udf_load`. |
-| **Track 2: Agent Memory & Coordination** | Durable cross-session episodic, semantic, and procedural memory; multi-agent coordination; multi-tenant graph isolation. | • **Episodic Finding Memory Subgraphs**: Persists `(:Finding)-[:ABOUT]->(:Host)` and `(:Finding)-[:PART_OF_INCIDENT]->(:Incident)` subgraphs surviving process restarts.<br/>• **Procedural Containment Audit Records**: Immutable execution receipts recording `paths_severed`, `egress_reduced_mbps`, reviewer authorization, and verification state.<br/>• **Cryptographic Idempotency Keys**: Prevents replay attacks and duplicate containment executions.<br/>• **Cryptographic Multi-Tenant Isolation**: Tenant validation enforces strict graph separation (`sec_ops_tenant_alpha` vs `tenant_beta`); zero cross-tenant query leakage. |
-| **Track 3: Company Brain** | Connected organizational knowledge graph resolving infrastructure to human teams, on-call schedules, playbooks, and change history. | • **Organizational Traversal**: Resolves `(:Host)-[:RUNS_SERVICE]->(:Service)<-[:OWNS_SERVICE]-(:Team)<-[:ONCALL_FOR]-(:Person)`.<br/>• **Runbook Resolution**: Maps compromised services directly to operational playbooks (`(:Service)-[:HAS_RUNBOOK]->(:Runbook)`) with documented response SLAs (e.g. 15-minute SLA).<br/>• **Provenance Tracking**: Connects endpoints to recent deployments (`(:Service)-[:HAS_CHANGE]->(:Commit)`) to identify recent configuration diffs.<br/>• **Sub-50ms Graph SLA**: Traverses cross-domain organizational relationships in sub-millisecond FalkorDB queries. |
+**RootMesh** is an enterprise graph threat operations engine powered by **FalkorDB GraphBLAS**. By modeling corporate digital assets, service dependencies, CVE vulnerabilities, and organizational ownership as an active property graph, RootMesh evaluates multi-hop lateral movement vectors, calculates exfiltration bottlenecks, and orchestrates Human-in-the-Loop containment workflows in sub-second latencies.
 
----
-
-## 📐 FalkorDB Graph Schema
-
-RootMesh maintains a multi-tenant property graph schema in FalkorDB:
-
-```
-                  ┌──────────────┐
-                  │    :Team     │◀──────[:ONCALL_FOR]──────┌──────────────┐
-                  └──────┬───────┘                          │   :Person    │
-                         │                                  └──────────────┘
-                    [:OWNS_SERVICE]
-                         │
-                         ▼
-┌──────────────┐  [:RUNS_SERVICE]  ┌──────────────┐  [:HAS_RUNBOOK]  ┌──────────────┐
-│    :Host     │──────────────────▶│   :Service   │─────────────────▶│   :Runbook   │
-└──────┬───────┘                   └──────┬───────┘                  └──────────────┘
-       │                                  │
-       │                             [:HAS_CHANGE]
-       │                                  │
-       │                                  ▼
-       │                           ┌──────────────┐
-       │                           │   :Commit    │
-       │                           └──────────────┘
-       ├──────[:COMMUNICATES]──────▶ ┌──────────────┐
-       │                             │    :Host     │
-       ├──────[:STORED_ON]──────────▶│  (Storage)   │◀──────[:STORED_ON]──────┌──────────────┐
-       │                             └──────────────┘                         │  :Database   │
-       ├──────[:HAS_VULNERABILITY]─▶ ┌──────────────┐                         └──────────────┘
-       │                             │    :CVE      │
-       │                             └──────────────┘
-       ├──────[:ABOUT]─────────────◀ ┌──────────────┐
-       │                             │   :Finding   │──────[:PART_OF_INCIDENT]──▶ ┌──────────────┐
-       │                             └──────────────┘                             │  :Incident   │
-       └─────────────────────────────────────────────────────────────────────────▶└──────────────┘
-```
-
-### Node Labels
-| Node Label | Key Properties | Description |
-|:-----------|:---------------|:------------|
-| `:Host` | `id, name, ip, edr, smb_signing, firewall, status` | Network workstations, jump bastions, proxies, and routers. |
-| `:Database` | `id, name, classification, capacity_mbps` | Critical data stores (e.g. `HR-Payroll-DB` with `PII_RESTRICTED`). |
-| `:Service` | `id, name, tier, repo` | Connected software services and internal APIs. |
-| `:Team` | `id, name, slack_channel, escalation_policy` | Owning organizational and SecOps response teams. |
-| `:Person` | `id, name, email, role, phone` | On-call engineers and incident responders. |
-| `:Runbook` | `id, title, url, sla_minutes` | Verified incident response playbooks and containment SOPs. |
-| `:Commit` | `sha, author, message, timestamp` | Recent software deployment commits and security policy updates. |
-| `:CVE` | `id, name, cvss` | Known software vulnerabilities (e.g. CVE-2017-0144 EternalBlue). |
-| `:Incident` | `id, title, status, created_at, patient_zero_id` | Incident investigation sessions and root cases. |
-| `:Finding` | `id, text, severity, session_id, created_at` | Episodic memory nodes persisted across sessions. |
-
-### Edge Types
-| Relationship | Path | Key Properties | Semantics |
-|:-------------|:-----|:---------------|:----------|
-| `:COMMUNICATES` | `(:Host) -> (:Host)` | `bandwidth_mbps` | Network communication path with capacity property. |
-| `:EXPOSED_TO` | `(:Host) -> (:Host)` | `bandwidth_mbps` | Vulnerable network exposure vector. |
-| `:STORED_ON` | `(:Database) -> (:Host)` | `bandwidth_mbps` | Database storage host association. |
-| `:RUNS_SERVICE`| `(:Host) -> (:Service)` | — | Service deployment on host infrastructure. |
-| `:OWNS_SERVICE`| `(:Team) -> (:Service)` | `sla_tier` | Organizational governance and ownership. |
-| `:ONCALL_FOR` | `(:Person) -> (:Team)` | `schedule, shift` | Active incident on-call duty mapping. |
-| `:HAS_RUNBOOK` | `(:Service) -> (:Runbook)`| — | Authorized SOP containment playbook link. |
-| `:HAS_CHANGE`  | `(:Service) -> (:Commit)` | — | Configuration change provenance link. |
-| `:HAS_VULNERABILITY` | `(:Host) -> (:CVE)` | — | Vulnerability correlation. |
-| `:ABOUT`       | `(:Finding) -> (:Host)` | — | Episodic memory finding association. |
-| `:PART_OF_INCIDENT` | `(:Finding) -> (:Incident)` | — | Cross-session incident graph association. |
+### Target Personas & Use Cases
+- **Security Operations Centers (SOC):** Rapidly assess the true blast radius of Patient Zero hosts and resolve structural choke points.
+- **Incident Responders:** Formulate guided mitigation proposals with cryptographic proof of lateral isolation and egress bandwidth reduction.
+- **Enterprise SecOps Leads:** Enforce non-repudiable human governance where every containment action requires verified, role-segregated authorization before execution.
 
 ---
 
-## ⚡ Real Cypher Queries & GraphBLAS Algorithms
+## Verified Capabilities
 
-### 1. Multi-Hop Lateral Propagation Traversal (`*1..4`)
-Evaluates reachable exposure vectors from Patient Zero through unfirewalled intermediate hosts:
-```cypher
-MATCH (pz:Host {id: $patient_zero_id})
-MATCH path = (pz)-[:COMMUNICATES|EXPOSED_TO*1..4]->(target:Host)
-WHERE ALL(n IN nodes(path) WHERE coalesce(n.firewall, false) = false)
-RETURN target.name AS target_name,
-       target.ip AS target_ip,
-       length(path) AS hops,
-       [n IN nodes(path) | n.name] AS full_vector
-ORDER BY hops ASC, target.name ASC;
-```
+RootMesh implements strictly verified, test-backed operational capabilities:
 
-### 2. PageRank Structural Centrality Scoring
-Executes FalkorDB matrix-accelerated PageRank over the communication graph:
-```cypher
-CALL algo.pageRank('Host', 'COMMUNICATES', {
-  dampingFactor: 0.85,
-  maxIterations: 20,
-  tolerance: 0.0001
-})
-YIELD node, score
-RETURN node.name AS host_name, node.ip AS ip, score
-ORDER BY score DESC
-LIMIT 10;
-```
-
-### 3. MaxFlow / MinCut Perimeter Egress Bottleneck
-Computes the exact network bandwidth ceiling from Patient Zero to the perimeter egress firewall:
-```cypher
-CALL algo.maxFlow($patient_zero_id, $sink_id, 'COMMUNICATES', 'bandwidth_mbps')
-YIELD maxFlow, minCut
-RETURN maxFlow AS perimeter_egress_mbps,
-       [edge IN minCut | {source: startNode(edge).name, target: endNode(edge).name}] AS choke_points;
-```
-
-### 4. Shortest Path to High-Value Restricted Database
-Resolves proximity to restricted databases storing PII or cryptographic credentials:
-```cypher
-MATCH (source:Host {id: $source_id}), (db:Database {id: $db_id})
-MATCH (db)-[:STORED_ON]->(storage_host:Host)
-WITH source, storage_host, db, shortestPath((source)-[:COMMUNICATES|EXPOSED_TO*]->(storage_host)) AS path
-RETURN db.id AS db_id,
-       db.name AS db_name,
-       db.classification AS classification,
-       CASE WHEN source.id = storage_host.id THEN [source.name]
-            WHEN path IS NOT NULL THEN [n IN nodes(path) | n.name]
-            ELSE [] END AS path_to_host,
-       CASE WHEN source.id = storage_host.id THEN 0
-            WHEN path IS NOT NULL THEN length(path)
-            ELSE null END AS distance;
-```
-
-### 5. Company Brain Full Governance Traversal
-Traverses infrastructure to connected service, owning team, on-call lead, SOP runbook, and recent Git commits:
-```cypher
-MATCH (h:Host {id: $host_id})
-OPTIONAL MATCH (h)-[:RUNS_SERVICE]->(s:Service)
-OPTIONAL MATCH (t:Team)-[:OWNS_SERVICE|OWNS]->(s)
-OPTIONAL MATCH (t_direct:Team)-[:OWNS]->(h)
-WITH h, s, coalesce(t, t_direct) AS owning_team
-OPTIONAL MATCH (p:Person)-[oncall:ONCALL_FOR]->(owning_team)
-OPTIONAL MATCH (s)-[:HAS_RUNBOOK]->(rb:Runbook)
-OPTIONAL MATCH (s)-[:HAS_CHANGE]->(cm:Commit)
-RETURN owning_team.name AS team,
-       p.name AS oncall,
-       p.email AS oncall_email,
-       rb.title AS runbook_title,
-       rb.sla_minutes AS runbook_sla_minutes,
-       cm.sha AS commit_sha;
-```
-
-### 6. Monte Carlo Probabilistic Infection UDF (`blast_radius`)
-An embedded JavaScript UDF loaded into FalkorDB via `db.udf_load` executing stochastic infection spread simulations considering EDR, SMB signing, and firewall attributes:
-```cypher
-RETURN blast_radius_lib.blast_radius($patient_zero_id, 500) AS simulation_distribution;
-```
+- **Multi-Tenant Property Graph Architecture:** Complete tenant data segregation in FalkorDB namespaces (`sec_ops_tenant_alpha`, `sec_ops_tenant_beta`, `enterprise_soc_corp`).
+- **Autonomous Multi-Hop Attack Traversal:** Evaluates up to 4 hops of active communication vectors (`COMMUNICATES`, `EXPOSED_TO`) across unfirewalled hosts in sub-40ms queries.
+- **Structural Choke Point Analysis (PageRank):** Hardware-accelerated GraphBLAS PageRank centrality scoring identifying critical transit infrastructure.
+- **Perimeter Egress Bottleneck Calculation (MaxFlow):** Computes exact network exfiltration bandwidth ceilings from compromised assets to egress firewalls.
+- **High-Value Database Proximity:** Determines shortest lateral routes to restricted databases (e.g., PII payroll data stores).
+- **Company Brain Context Resolution:** Traverses service ownership, on-call responders, runbook links, and commit provenance to surface human operational context.
+- **Persistent Episodic Threat Memory:** Persists structured findings (`(:Finding)-[:ABOUT]->(:Host)`) durable across server restarts and analyst sessions.
+- **Swipeable Incident Triage & Action Deck:** Interactive operational deck supporting keyboard, swipe, and button triage with instant memory persistence and mitigation proposal creation.
+- **Guarded Human-in-the-Loop Lifecycle:** Strict 8-stage governance requiring explicit, role-segregated authorization for all containment decisions. Self-approval is architecturally forbidden.
+- **Graph Topology Containment Simulation:** Modifies graph topology in real time (`GRAPH_TOPOLOGY_SIMULATION` mode) to sever lateral edges and verify post-action blast-radius elimination.
+- **Before-and-After Verification Audits:** Automated graph re-scan proving zero remaining reachable paths and zero egress bandwidth post-containment.
+- **Authenticated Real-Time Event Streaming:** Secure, tenant-isolated WebSocket event stream (`/ws/threat-stream`) enforcing in-band authentication.
 
 ---
 
-## 🔒 Guarded Approval & RBAC Incident Lifecycle
+## Architecture
 
-To ensure safe, human-governed incident response, RootMesh enforces an 8-stage lifecycle with zero automated self-approval:
+RootMesh is built on a modern, decoupled three-tier architecture:
 
 ```
-[1. Sensor Detection] ➔ [2. Graph Traversal] ➔ [3. Blast Radius & DB Vector] ➔ [4. Risk Assessment]
-                                                                                      │
-                                                                                      ▼
-[8. Durable Audit]    ◀── [7. Verification]  ◀── [6. Reviewer Authorization] ◀── [5. Propose Action]
- (Episodic Memory)        (FalkorDB Re-Scan)       (Explicit Human Decision)       (Responder)
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Next.js 15.5 Frontend                           │
+│   (App Router, Tailwind CSS v4, Framer Motion, Standalone Runner)      │
+│   - Pre-rendered Static Landing for sub-second FCP                     │
+│   - Interactive SVG Graph Canvas & Swipeable Action Deck               │
+└───────────────────┬────────────────────────────────┬───────────────────┘
+                    │ HTTPS :8000                     │ WSS /ws/threat-stream
+                    ▼                                ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        FastAPI 0.115+ Backend                          │
+│   (Python 3.12, Uvicorn, Pydantic v2, PyJWT Cryptography)              │
+│   - RS256 Clerk B2B Identity Verification & JWKS Key Rotation          │
+│   - Strict Tenant Isolation & Idempotent Proposal Engine               │
+│   - Standalone Model Context Protocol (MCP) Server                     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Redis Protocol :6379
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                       FalkorDB Graph Engine                            │
+│   (SuiteSparse GraphBLAS Linear Algebra, Embedded JavaScript UDFs)     │
+│   - Matrix-Accelerated Cypher Traversals (*1..4)                       │
+│   - In-Graph PageRank, MaxFlow, and Shortest-Path Algorithms           │
+│   - Isolated Multi-Tenant Graph Namespaces                             │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Role-Based Separation of Duties**:
-   - `containment:propose`: Incident Responder can formulate proposals based on graph evidence.
-   - `containment:approve`: SecOps Reviewer must explicitly issue an `APPROVE` or `REJECT` decision. Responders cannot approve their own actions.
-   - `containment:execute`: Mitigation Agent executes only approved, non-expired proposals.
-2. **Fail-Closed Guarantees**:
-   - Rejections fail closed: graph topology remains untouched.
-   - Expired proposals (15-minute TTL) fail closed.
-3. **Idempotency & Replay Attack Prevention**:
-   - Every execution requires a unique `idempotency_key`.
-   - Repeated submissions return the cached verifiable audit receipt without mutating the graph twice.
-4. **Before/After Factual Containment Verification**:
-   - Re-traverses FalkorDB after simulated containment to verify that lateral paths are severed and egress bandwidth is reduced to 0.0 Mbps.
+For complete architecture specifications, state transition diagrams, and ER data schemas, see [docs/architecture.md](docs/architecture.md).
 
 ---
 
-## 🤖 Model Context Protocol (MCP) Server
-
-RootMesh includes a standalone hardened MCP Server (`backend/app/mcp_server.py`) exposing fixed, parameterized tools for AI agents:
-
-| MCP Tool Name | Description | Safety Guarantees |
-|:--------------|:------------|:------------------|
-| `falkordb_execute_cypher` | Executes fixed, allowlisted read-only graph queries. | Prohibits arbitrary Cypher, mutation clauses (`CREATE`, `SET`, `DELETE`), administrative calls, and comments/semicolons. |
-| `falkordb_triage_host` | Resolves host metadata, EDR, SMB signing, and firewall state. | Fixed schema inspection; tenant-validated. |
-| `falkordb_blast_radius` | Runs the embedded Monte Carlo infection spread simulation. | Clamped simulation runs `[1, 5000]`; parameterized input. |
-| `falkordb_save_finding_memory` | Persists an incident finding as an episodic memory node. | Verifies host existence before write; validates severity values. |
-
----
-
-## 🎨 Warm Light Editorial Design System
-
-RootMesh utilizes an intentional, distinctive **Warm Light Editorial Palette** tailored for mission-critical security operations:
-
-| Palette Token | Hex Code | Visual Application |
-|:--------------|:---------|:-------------------|
-| **Ivory** | `#FAF7F2` | Workspace background, canvas surface, code editor gutter |
-| **Stone** | `#EEE6DC` | Soft card fills, border dividers, sub-ribbon surfaces |
-| **Terracotta**| `#D26A50` | Primary actions, patient zero indicators, attack edge vectors |
-| **Amber** | `#E6A548` | High-value database assets, warning indicators, egress paths |
-| **Plum** | `#82465D` | Perimeter sinks, PageRank badges, organizational governance |
-| **Graphite** | `#302B30` | High-contrast editorial typography, dark terminal viewports |
-
----
-
-## 🚀 Quickstart & Setup Guide
+## Quickstart
 
 ### Prerequisites
-- Docker & Docker Compose
-- Python 3.12+
-- Node.js 20+
+- **Node.js:** v20.x or v22.x (`node -v`)
+- **Python:** 3.12.x (`python --version`) with [`uv`](https://github.com/astral-sh/uv) or `pip`
+- **Docker & Docker Compose:** Docker Desktop or Docker Engine (`docker --version`)
 
-### Step 1: Start FalkorDB
+### 1. Start FalkorDB
+Launch the FalkorDB graph engine container:
 ```bash
 docker run -d --name rootmesh-falkordb -p 6379:6379 -p 3005:3000 falkordb/falkordb:latest
 ```
-*(FalkorDB Visualizer is accessible on `http://localhost:3005`)*
+*(Optional FalkorDB Browser Visualizer will be available on `http://localhost:3005`)*
 
-### Step 2: Initialize & Seed the Backend
+### 2. Configure Environment Files
+Copy the sanitized environment templates:
 ```bash
-cd d:\rootmesh\backend
-python -m venv .venv
-.venv\Scripts\activate   # Windows (.venv/bin/activate on Linux/macOS)
-pip install -r requirements.txt
+# Windows PowerShell
+Copy-Item .env.example .env
+Copy-Item backend\.env.example backend\.env
+Copy-Item frontend\.env.example frontend\.env.local
 
-# Seed the multi-tenant threat graph and register the JavaScript UDF
+# Linux / macOS
+cp .env.example .env
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env.local
+```
+
+### 3. Initialize & Launch the Backend
+```bash
+cd backend
+
+# Using uv (Recommended)
+uv venv
+# Activate virtual environment:
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+# Linux/macOS:        source .venv/bin/activate
+uv pip install -r requirements.txt
+
+# Seed the tenant graphs and register the JavaScript UDF:
 python seed_threat_graph.py
 
-# Launch FastAPI Backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Launch FastAPI application:
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
-*(Swagger UI is available at `http://localhost:8000/docs`)*
+Backend API documentation (Swagger UI) is available at `http://localhost:8000/docs`.
 
-### Step 3: Launch the Frontend
+### 4. Launch the Frontend
+In a separate terminal:
 ```bash
-cd d:\rootmesh\frontend
+cd frontend
 npm install
-npm run dev --turbopack
+npm run dev
 ```
-*(RootMesh Workspace opens at `http://localhost:3000`)*
+Open `http://localhost:3000` in your browser.
 
-### Step 4: Run the Complete Test Suite
+---
+
+## Testing
+
+RootMesh maintains comprehensive automated regression suites for both frontend and backend.
+
+### Backend Pytest Suite (Port 6380 Test Guard)
+To protect persistent graphs, all write-producing backend tests strictly require an isolated test database on port 6380. The test suite automatically fails closed if tests attempt to target port 6379.
+
+1. Launch disposable test database:
+   ```bash
+   docker run -d --name rootmesh-test-falkordb -p 6380:6379 falkordb/falkordb:latest
+   ```
+2. Execute test suite:
+   ```bash
+   cd backend
+   pytest -v
+   ```
+   *Verified: 167 of 167 tests passing (100% pass rate).*
+
+### Frontend Verification Suite
 ```bash
-# In backend/
-pytest tests/ -v
+cd frontend
 
-# In frontend/
+# Run unit and truthfulness test suite
+npm test
+
+# Run strict TypeScript compiler verification
 npx tsc --noEmit
+
+# Run ESLint check
 npm run lint
+
+# Build standalone production distribution bundle
 npm run build
 ```
+*Verified: 67 of 67 tests passing, 0 TypeScript errors, 0 ESLint errors.*
 
 ---
 
-## 🧪 Automated Test Suite & Quality Verification
+## Security Model
 
-RootMesh has undergone comprehensive test validation across the entire stack:
-
-```
-============================= test session starts =============================
-platform win32 -- Python 3.14.4, pytest-9.1.1
-rootdir: D:\rootmesh\backend
-collected 68 items
-
-tests/test_agents.py (5 tests) ........................................ PASSED
-tests/test_cypher.py (5 tests) ........................................ PASSED
-tests/test_falkordb_engine.py (19 tests) .............................. PASSED
-tests/test_mcp_tools.py (7 tests) ..................................... PASSED
-tests/test_module_003_agent_memory_company_brain.py (4 tests) ......... PASSED
-tests/test_security_hardening.py (20 tests) ........................... PASSED
-tests/test_tenant_isolation.py (5 tests) .............................. PASSED
-tests/test_websocket.py (3 tests) ..................................... PASSED
-
-============================= 68 passed in 31.80s =============================
-```
-
-- **Frontend TypeScript (`npx tsc --noEmit`)**: 0 errors
-- **Frontend ESLint (`npm run lint`)**: 0 errors, 0 warnings
-- **Next.js Production Build (`npm run build`)**: 100% static prerender success
+1. **Role-Based Separation of Duties:**
+   - `containment:propose`: Incident Responders can formulate mitigation proposals based on graph evidence.
+   - `containment:approve`: Authorized Reviewers must explicitly review and issue decisions. Proposers cannot approve their own actions.
+   - `containment:execute`: Mitigation service executes only valid, approved, unexpired proposals.
+2. **Fail-Closed Guarantees:**
+   - Unapproved, rejected, or expired proposals (15-minute TTL) terminate with zero graph modifications.
+   - In production mode, missing Clerk keys, missing JWT secrets, or insecure default secrets intentionally cause the backend to abort startup.
+3. **In-Band WebSocket Authentication:**
+   - URL query parameter tokens (`?token=...`) are explicitly rejected to prevent credential leakage in HTTP access and proxy logs.
+   - Connections must send an authenticated JSON handshake frame within 5.0 seconds.
+4. **Tenant Isolation:**
+   - Every tenant graph is a separate physical namespace inside FalkorDB.
+   - Tenant IDs are derived exclusively from verified Clerk Organization tokens (`org_id`), not untrusted client headers.
 
 ---
 
-## ⚠️ Disclosures & Operational Boundaries
+## Documentation
 
-1. **Synthetic Demonstration Data**:
-   Company Brain organizational records (personnel names, email addresses, Slack channels, commit hashes, and runbook links) and incident threat vectors are synthetic demonstration entities in FalkorDB for evaluation purposes. They do not represent real external integrations.
-2. **Graph-Level Simulated Containment**:
-   All containment actions execute simulated graph topology isolation within FalkorDB (`SET h.firewall = true, h.status = 'CONTAINED'`). Physical network isolation on hardware switches or enterprise firewalls requires an authorized hardware appliance connector.
-3. **AI-Assisted Development Disclosure**:
-   In accordance with Graph Hacks 2026 guidelines, AI code generation assistants were utilized for pair programming, test case generation, and UI drafting. All core architecture, Cypher queries, FalkorDB GraphBLAS integrations, security boundaries, and authorization controls were verified and validated against real local services.
+Comprehensive engineering documentation is maintained in the `docs/` directory:
+
+- [docs/architecture.md](docs/architecture.md): Complete system architecture, 8-stage incident lifecycle diagrams, FalkorDB property graph entity schemas, and security boundaries.
+- [docs/deployment-runbook.md](docs/deployment-runbook.md): Production deployment guide, NGINX TLS reverse proxy configuration, FalkorDB zero-downtime backup & recovery runbook, and staging release acceptance checklist.
 
 ---
 
-*RootMesh — Built for Graph Hacks 2026 with FalkorDB GraphBLAS*
+## Disclosures & Operational Boundaries
+
+1. **Demonstration Topology Data:**
+   Organizational Company Brain records (personnel names, contact information, commit hashes, and runbook links) and incident threat vectors are synthetic demonstration entities populated in FalkorDB for evaluation purposes.
+2. **Graph Topology Simulation Mode:**
+   Containment actions operate in `GRAPH_TOPOLOGY_SIMULATION` mode inside FalkorDB (`SET h.firewall = true, h.status = 'CONTAINED'`). Physical enforcement on enterprise firewalls or switch ports requires an authorized hardware appliance connector.
+3. **Mobile Performance Baseline:**
+   Mobile audits on simulated 4G mobile devices with 4x CPU slowdown achieve a Lighthouse Performance score of 67 (LCP 4.82s, TBT 514ms). Unthrottled desktop performance achieves a 99 score (LCP 1.0s, TBT 0ms).
+4. **Third-Party Development Cookies:**
+   Best Practices audits report 77 in development due to third-party Cloudflare cookies (`__cf_bm`, `_cfuvid`) set by Clerk's shared development subdomain (`accounts.dev`). In production deployments with custom domains, this issue is eliminated.

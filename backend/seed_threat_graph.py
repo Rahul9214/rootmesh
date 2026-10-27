@@ -19,25 +19,41 @@ FALKOR_PORT = int(os.getenv("FALKOR_PORT", "6379"))
 FALKOR_PASSWORD = os.getenv("FALKOR_PASSWORD", "")
 TENANT_ID = os.getenv("TENANT_ID", "sec_ops_tenant_alpha")
 
-conn_kwargs: dict = {"host": FALKOR_HOST, "port": FALKOR_PORT}
-if FALKOR_PASSWORD:
-    conn_kwargs["password"] = FALKOR_PASSWORD
-
-db = FalkorDB(**conn_kwargs)
+conn_url = os.getenv("FALKOR_URL") or os.getenv("REDIS_URL") or os.getenv("REDIS_PRIVATE_URL")
+if conn_url:
+    db = FalkorDB.from_url(conn_url)
+    print(f"[*] Connected to FalkorDB via connection URL")
+else:
+    conn_kwargs: dict = {"host": FALKOR_HOST, "port": FALKOR_PORT}
+    if FALKOR_PASSWORD:
+        conn_kwargs["password"] = FALKOR_PASSWORD
+    db = FalkorDB(**conn_kwargs)
+    print(f"[*] Connected to FalkorDB on {FALKOR_HOST}:{FALKOR_PORT}")
 
 # ──────────────────────────────────────────────
-# 2. Multi-Tenant Graph Isolation
+# 2. Multi-Tenant Graph Isolation & Idempotent Seeding
 # ──────────────────────────────────────────────
 
 graph = db.select_graph(TENANT_ID)
 
+force_seed = os.getenv("FORCE_SEED", "false").lower() in {"1", "true", "yes"}
+already_seeded = False
 try:
-    graph.delete()
-    print(f"[*] Cleared existing graph: {TENANT_ID}")
+    check_res = graph.query("MATCH (h:Host) RETURN count(h) AS cnt")
+    if check_res.result_set and check_res.result_set[0][0] > 0:
+        already_seeded = True
 except Exception:
     pass
 
-print(f"[*] Initializing RootMesh Threat Model on Graph: {TENANT_ID}...")
+if already_seeded and not force_seed:
+    print(f"[*] Graph '{TENANT_ID}' is already populated. Preserving persistent graph and incident memory. (Set FORCE_SEED=true to force reset)")
+else:
+    try:
+        graph.delete()
+        print(f"[*] Cleared existing graph: {TENANT_ID}")
+    except Exception:
+        pass
+    print(f"[*] Initializing RootMesh Threat Model on Graph: {TENANT_ID}...")
 
 # ──────────────────────────────────────────────
 # 3. Seed Core Infrastructure & Threat Graph

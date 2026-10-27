@@ -7,7 +7,7 @@ And Track 3 Company Brain organizational traversal endpoints.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -18,6 +18,7 @@ from app.incident.models import (
     ExecutionAuditResponse,
     IncidentInvestigationReport,
     IncidentInvestigationRequest,
+    IncidentSummaryResponse,
     ProposeActionRequest,
     ReviewActionRequest,
 )
@@ -124,6 +125,21 @@ async def get_procedural_memory(
     enforce_tenant_context(tenant_id, principal)
     agent = MemoryAgent(tenant_id=tenant_id)
     return agent.recall_procedural_memory(host_id=host_id)
+
+
+@router.get("/{tenant_id}", response_model=List[IncidentSummaryResponse])
+async def list_incidents_for_tenant(
+    tenant_id: str,
+    limit: int = 5,
+    status: Optional[str] = None,
+    principal: SecurityPrincipal = Depends(require_permission("threat:read")),
+):
+    """
+    List persisted incidents for a tenant from FalkorDB.
+    Guarded by permission checks, bounded retrieval, and strict tenant isolation.
+    """
+    enforce_tenant_context(tenant_id, principal)
+    return incident_service.list_incidents(tenant_id=tenant_id, limit=limit, status=status)
 
 
 @router.get("/{tenant_id}/{incident_id}")

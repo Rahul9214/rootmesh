@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import json
 import pytest
+from app.db.test_guard import TEST_TENANT_ALPHA
 from app.mcp_server import mcp_app
 
-TENANT_ID = "sec_ops_tenant_alpha"
+TENANT_ID = TEST_TENANT_ALPHA
+
 
 
 def _extract_text(res) -> str:

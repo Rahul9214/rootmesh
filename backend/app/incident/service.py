@@ -116,15 +116,16 @@ class IncidentResponseService:
         Coordinates TriageAgent, MitigationAgent, Company Brain, and MemoryAgent.
         Persists episodic finding and incident subgraph in FalkorDB.
         """
-        enforce_tenant_context(req.tenant_id, principal)
+        effective_tenant = req.tenant_id or principal.tenant_id
+        enforce_tenant_context(effective_tenant, principal)
         t0 = time.perf_counter()
 
         incident_id = req.incident_id or f"inc-{uuid.uuid4().hex[:8]}"
         title = req.title or f"Automated Threat Investigation: {req.patient_zero_id}"
-        graph = db_pool.get_tenant_graph(req.tenant_id)
+        graph = db_pool.get_tenant_graph(effective_tenant)
 
         # 1. Triage Agent (Multi-hop attack paths, CVEs, Monte Carlo UDF)
-        triage_agent = TriageAgent(tenant_id=req.tenant_id)
+        triage_agent = TriageAgent(tenant_id=effective_tenant)
         triage_res = triage_agent.triage_host(req.patient_zero_id, max_hops=4)
         if triage_res.get("status") == "NOT_FOUND":
             raise HTTPException(
@@ -133,7 +134,7 @@ class IncidentResponseService:
             )
 
         # 2. Mitigation Agent (MaxFlow Egress Risk, PageRank Critical Assets, Shortest Path to Database)
-        mitigation_agent = MitigationAgent(tenant_id=req.tenant_id)
+        mitigation_agent = MitigationAgent(tenant_id=effective_tenant)
         egress_res = mitigation_agent.assess_egress_risk(req.patient_zero_id, sink_id="host-7")
 
         pr_raw = graph.ro_query(queries.PAGE_RANK_ASSETS).result_set
@@ -157,10 +158,10 @@ class IncidentResponseService:
             }
 
         # 3. Track 3 Company Brain: Organizational Context & Runbook Resolution
-        company_brain = self.resolve_company_brain(req.tenant_id, req.patient_zero_id)
+        company_brain = self.resolve_company_brain(effective_tenant, req.patient_zero_id)
 
         # 4. Track 2 Memory Agent: Episodic & Procedural Memory Recall
-        memory_agent = MemoryAgent(tenant_id=req.tenant_id)
+        memory_agent = MemoryAgent(tenant_id=effective_tenant)
         episodic_memories = memory_agent.recall_host_memory(req.patient_zero_id, limit=5)
         procedural_memories = memory_agent.recall_procedural_memory(req.patient_zero_id, limit=5)
 
@@ -201,7 +202,7 @@ class IncidentResponseService:
 
         report = IncidentInvestigationReport(
             incident_id=incident_id,
-            tenant_id=req.tenant_id,
+            tenant_id=effective_tenant,
             patient_zero_id=req.patient_zero_id,
             patient_zero_name=company_brain.host_name,
             title=title,
@@ -224,7 +225,7 @@ class IncidentResponseService:
             investigation_time_ms=exec_ms,
         )
 
-        self._dispatch_ws_event(req.tenant_id, {
+        self._dispatch_ws_event(effective_tenant, {
             "event": "INCIDENT_INVESTIGATED",
             "incident_id": incident_id,
             "patient_zero_id": req.patient_zero_id,
@@ -246,7 +247,8 @@ class IncidentResponseService:
         Stage 1-5: Incident -> Investigation -> Graph Evidence -> Risk Assessment -> Proposed Action.
         Requires 'containment:propose' permission. Validates target host against FalkorDB.
         """
-        enforce_tenant_context(req.tenant_id, principal)
+        effective_tenant = req.tenant_id or principal.tenant_id
+        enforce_tenant_context(effective_tenant, principal)
 
         if not principal.has_permission("containment:propose"):
             raise HTTPException(
@@ -254,22 +256,33 @@ class IncidentResponseService:
                 detail="Forbidden: Principal lacks 'containment:propose' permission.",
             )
 
-        graph = db_pool.get_tenant_graph(req.tenant_id)
+        graph = db_pool.get_tenant_graph(effective_tenant)
         host_exists = graph.ro_query(queries.HOST_EXISTS, {"host_id": req.target_host_id}).result_set
         if not host_exists or not host_exists[0][0]:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Target host '{req.target_host_id}' does not exist in tenant '{req.tenant_id}'.",
+                detail=f"Target host '{req.target_host_id}' does not exist in tenant '{effective_tenant}'.",
             )
 
         target_host_name = host_exists[0][1]
 
+        # Requirement 4: Proposals must reference a valid persisted incident
+        inc_exists = graph.ro_query(
+            "MATCH (inc:Incident {id: $iid}) RETURN count(inc)",
+            {"iid": req.incident_id},
+        ).result_set
+        if not inc_exists or not inc_exists[0][0]:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Incident '{req.incident_id}' not found in tenant '{effective_tenant}'. Proposals must reference a verified, persisted incident.",
+            )
+
         # Stage 2 & 3: Investigation & Graph Evidence via TriageAgent
-        triage_agent = TriageAgent(tenant_id=req.tenant_id)
+        triage_agent = TriageAgent(tenant_id=effective_tenant)
         triage_res = triage_agent.triage_host(req.target_host_id, max_hops=4)
 
         # Stage 4: Risk Assessment via MitigationAgent
-        mitigation_agent = MitigationAgent(tenant_id=req.tenant_id)
+        mitigation_agent = MitigationAgent(tenant_id=effective_tenant)
         egress_res = mitigation_agent.assess_egress_risk(req.target_host_id, sink_id="host-7")
 
         action_id = f"act-{uuid.uuid4().hex[:12]}"
@@ -289,7 +302,7 @@ class IncidentResponseService:
         proposal = ActionProposal(
             action_id=action_id,
             incident_id=req.incident_id,
-            tenant_id=req.tenant_id,
+            tenant_id=effective_tenant,
             target_host_id=req.target_host_id,
             target_host_name=target_host_name,
             action_type=req.action_type,
@@ -777,13 +790,19 @@ class IncidentResponseService:
     def get_incident(self, tenant_id: str, incident_id: str) -> Dict[str, Any]:
         """
         Retrieves durable incident state, findings, proposals, and audit records from FalkorDB.
+        Supports 'latest' or 'inc-latest' alias to retrieve the most recent incident.
         Survives application restarts.
         """
         graph = db_pool.get_tenant_graph(tenant_id)
-        inc_raw = graph.ro_query(
-            "MATCH (inc:Incident {id: $iid}) RETURN inc.id, inc.title, inc.severity, inc.status, inc.patient_zero_id, inc.created_at",
-            {"iid": incident_id},
-        ).result_set
+        if incident_id in ("latest", "inc-latest"):
+            inc_raw = graph.ro_query(
+                "MATCH (inc:Incident) RETURN inc.id, inc.title, inc.severity, inc.status, inc.patient_zero_id, inc.created_at ORDER BY inc.created_at DESC LIMIT 1"
+            ).result_set
+        else:
+            inc_raw = graph.ro_query(
+                "MATCH (inc:Incident {id: $iid}) RETURN inc.id, inc.title, inc.severity, inc.status, inc.patient_zero_id, inc.created_at",
+                {"iid": incident_id},
+            ).result_set
 
         if not inc_raw or not inc_raw[0][0]:
             raise HTTPException(
@@ -792,19 +811,108 @@ class IncidentResponseService:
             )
 
         inc_row = inc_raw[0]
+        actual_incident_id = inc_row[0]
         patient_zero_id = inc_row[4]
 
         findings_raw = graph.ro_query(
             "MATCH (f:Finding)-[:PART_OF_INCIDENT]->(inc:Incident {id: $iid}) RETURN f.id, f.text, f.severity, f.at",
-            {"iid": incident_id},
+            {"iid": actual_incident_id},
         ).result_set
 
         audit_raw = graph.ro_query(
             "MATCH (aud:AuditLog {incident_id: $iid}) RETURN aud.id, aud.action_id, aud.executed_by, aud.executed_at, aud.verification, aud.paths_severed, aud.egress_reduced",
-            {"iid": incident_id},
+            {"iid": actual_incident_id},
         ).result_set
 
+        props_raw = graph.ro_query(
+            "MATCH (a:ActionProposal {incident_id: $iid}) RETURN a.id, a.action_type, a.status, a.proposer, a.created_at, a.expires_at, a.reviewed_by, a.reviewed_at, a.review_comment, a.executed_at, a.target_host_id, a.target_host_name, a.justification, a.evidence, a.risk_assessment ORDER BY a.created_at DESC",
+            {"iid": actual_incident_id},
+        ).result_set
+
+        proposals_list = []
+        seen_prop_ids = set()
+        for p in props_raw:
+            pid = p[0]
+            seen_prop_ids.add(pid)
+            # Reconcile with in-memory status if fresher
+            cached = self._proposals.get(pid)
+            status_val = cached.status.value if cached else p[2]
+            rev_by = cached.reviewed_by if cached else p[6]
+            rev_at = cached.reviewed_at if cached else p[7]
+            rev_comm = cached.review_comment if cached else p[8]
+            exec_at = cached.executed_at if cached else p[9]
+
+            try:
+                ev = json.loads(p[13]) if isinstance(p[13], str) else (p[13] or {})
+            except Exception:
+                ev = {}
+            try:
+                risk = json.loads(p[14]) if isinstance(p[14], str) else (p[14] or {})
+            except Exception:
+                risk = {}
+
+            proposals_list.append({
+                "action_id": pid,
+                "action_type": p[1],
+                "status": status_val,
+                "proposer": p[3],
+                "created_at": p[4],
+                "expires_at": p[5],
+                "reviewed_by": rev_by,
+                "reviewed_at": rev_at,
+                "review_comment": rev_comm,
+                "executed_at": exec_at,
+                "target_host_id": p[10],
+                "target_host_name": p[11],
+                "justification": p[12],
+                "evidence": ev,
+                "risk_assessment": risk,
+            })
+
+        # Add any cached proposals for this incident not yet persisted in graph
+        for cached in self._proposals.values():
+            if cached.incident_id == actual_incident_id and cached.action_id not in seen_prop_ids:
+                proposals_list.append({
+                    "action_id": cached.action_id,
+                    "action_type": cached.action_type,
+                    "status": cached.status.value,
+                    "proposer": cached.proposer_principal,
+                    "created_at": cached.created_at,
+                    "expires_at": cached.expires_at,
+                    "reviewed_by": cached.reviewed_by,
+                    "reviewed_at": cached.reviewed_at,
+                    "review_comment": cached.review_comment,
+                    "executed_at": cached.executed_at,
+                    "target_host_id": cached.target_host_id,
+                    "target_host_name": cached.target_host_name,
+                    "justification": cached.justification,
+                    "evidence": cached.evidence,
+                    "risk_assessment": cached.risk_assessment,
+                })
+
         cb = self.resolve_company_brain(tenant_id, patient_zero_id)
+
+        # Extract persisted risk evidence from proposals or findings if available
+        risk_evidence: Dict[str, Any] = {}
+        for p in proposals_list:
+            risk = p.get("risk_assessment") or {}
+            if "lateral_targets" in risk and "target_count" not in risk_evidence:
+                risk_evidence["target_count"] = risk["lateral_targets"]
+            if "max_egress_mbps" in risk and "egress_risk_mbps" not in risk_evidence:
+                risk_evidence["egress_risk_mbps"] = risk["max_egress_mbps"]
+
+        if "target_count" not in risk_evidence or "egress_risk_mbps" not in risk_evidence:
+            import re
+            for f in findings_raw:
+                f_text = f[1] or ""
+                if "target_count" not in risk_evidence:
+                    m_p = re.search(r"(\d+)\s+lateral\s+propagation\s+paths", f_text)
+                    if m_p:
+                        risk_evidence["target_count"] = int(m_p.group(1))
+                if "egress_risk_mbps" not in risk_evidence:
+                    m_e = re.search(r"MaxFlow\s+egress\s+risk:\s*([0-9.]+)\s*Mbps", f_text)
+                    if m_e:
+                        risk_evidence["egress_risk_mbps"] = float(m_e.group(1))
 
         return {
             "incident_id": inc_row[0],
@@ -818,6 +926,7 @@ class IncidentResponseService:
                 {"id": f[0], "text": f[1], "severity": f[2], "timestamp": f[3]}
                 for f in findings_raw
             ],
+            "risk_evidence": risk_evidence,
             "audit_trail": [
                 {
                     "audit_id": a[0],
@@ -830,7 +939,54 @@ class IncidentResponseService:
                 }
                 for a in audit_raw
             ],
+            "proposals": proposals_list,
         }
+
+    def list_incidents(
+        self,
+        tenant_id: str,
+        limit: int = 5,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves bounded list of persisted incidents for a tenant from FalkorDB.
+        Avoids unbounded retrieval of historical incidents.
+        """
+        graph = db_pool.get_tenant_graph(tenant_id)
+        bounded_limit = min(max(1, limit), 20)
+
+        if status:
+            cypher = """
+            MATCH (inc:Incident)
+            WHERE inc.status = $status
+            RETURN inc.id, inc.title, inc.severity, inc.status, inc.patient_zero_id, inc.created_at
+            ORDER BY inc.created_at DESC
+            LIMIT $limit
+            """
+            results = graph.ro_query(cypher, {"status": status, "limit": bounded_limit}).result_set
+        else:
+            cypher = """
+            MATCH (inc:Incident)
+            RETURN inc.id, inc.title, inc.severity, inc.status, inc.patient_zero_id, inc.created_at
+            ORDER BY inc.created_at DESC
+            LIMIT $limit
+            """
+            results = graph.ro_query(cypher, {"limit": bounded_limit}).result_set
+
+        incidents = []
+        for r in results:
+            patient_zero_id = r[4] or "host-0"
+            cb = self.resolve_company_brain(tenant_id, patient_zero_id)
+            incidents.append({
+                "incident_id": r[0],
+                "title": r[1],
+                "severity": r[2],
+                "status": r[3],
+                "patient_zero_id": patient_zero_id,
+                "created_at": r[5],
+                "company_brain": cb.model_dump(),
+            })
+        return incidents
 
 
 # Global singleton instance for durable coordination

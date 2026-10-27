@@ -8,14 +8,13 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import List
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.config import settings
 from app.db.falkor_client import db_pool
 from app.db import queries
-from app.agents.mitigation import MitigationAgent
 from app.models.schemas import (
     AttackPathEntry,
     ContainmentRequest,
@@ -207,46 +206,37 @@ async def get_network_topology(
 
 
 # ──────────────────────────────────────────────
-# POST /api/v1/threat/contain
+# POST /api/v1/threat/contain (PERMANENTLY DISABLED)
 # ──────────────────────────────────────────────
 
-@router.post("/contain", response_model=ContainmentResponse)
+@router.post(
+    "/contain",
+    status_code=status.HTTP_410_GONE,
+    deprecated=True,
+    tags=["Threat Intelligence"],
+    summary="Permanently Disabled Legacy Containment Endpoint",
+)
 async def execute_containment(
-    req: ContainmentRequest,
-    principal: SecurityPrincipal = Depends(require_permission("containment:execute")),
+    _body: Optional[Any] = None,
 ):
     """
-    Executes graph-level simulated host containment in FalkorDB.
-    NOTE: Distinguishes graph simulation from physical hardware enforcement.
-    Disabled in production mode to prevent bypassing the guarded approval workflow.
+    PERMANENTLY DISABLED LEGACY ROUTE (HTTP 410 Gone).
+
+    Direct containment execution via /api/v1/threat/contain is permanently disabled
+    in all environments (development, testing, staging, and production).
+
+    Containment operations must exclusively follow the guarded 8-stage Human-in-the-Loop lifecycle:
+      1. Propose: POST /api/v1/incident/propose (containment:propose)
+      2. Review:  POST /api/v1/incident/review  (containment:approve)
+      3. Execute: POST /api/v1/incident/execute (containment:execute)
     """
-    if settings.is_production:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "Legacy direct containment route is disabled in production mode. "
-                "Containment operations must follow the guarded 8-stage lifecycle via /api/v1/incident/propose -> review -> execute."
-            ),
-        )
-
-    enforce_tenant_context(req.tenant_id, principal)
-    agent = MitigationAgent(tenant_id=req.tenant_id)
-    result = agent.execute_containment(host_id=req.host_id)
-
-    if result.get("status") == "FAILED":
-        raise HTTPException(status_code=404, detail=result.get("error", "Host not found"))
-
-    return ContainmentResponse(
-        status="CONTAINED",
-        host_id=result["host_id"],
-        host_name=result["host_name"],
-        firewall_active=result["firewall_active"],
-        containment_type="GRAPH_TOPOLOGY_SIMULATION",
-        enforcement_note=(
-            "Graph-level isolation verified in FalkorDB. "
-            "Physical hardware firewall rule enforcement requires authorized appliance connector."
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Direct containment execution via /api/v1/threat/contain is permanently disabled in all environments. "
+            "All containment actions must be explicitly authorized through the guarded lifecycle: "
+            "propose (/api/v1/incident/propose) -> review (/api/v1/incident/review) -> execute (/api/v1/incident/execute)."
         ),
-        execution_time_ms=result.get("execution_time_ms", 0.0),
     )
 
 

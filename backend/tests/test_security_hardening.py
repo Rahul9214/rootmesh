@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from datetime import timedelta
 import pytest
 from starlette.testclient import TestClient
@@ -37,8 +38,30 @@ from app.security.auth import (
     verify_access_token,
 )
 
-TENANT_ALPHA = "sec_ops_tenant_alpha"
-TENANT_BETA = "sec_ops_tenant_beta"
+from app.db.test_guard import TEST_TENANT_ALPHA, TEST_TENANT_BETA
+
+TENANT_ALPHA = TEST_TENANT_ALPHA
+TENANT_BETA = TEST_TENANT_BETA
+
+
+def _persist_test_incident(incident_id: str, host_id: str = "host-0", tenant_id: str = TENANT_ALPHA) -> None:
+    """Ensures a valid persisted incident node exists in the isolated test graph before proposing."""
+    graph = db_pool.get_tenant_graph(tenant_id)
+    graph.query(
+        """
+        MATCH (h:Host {id: $host_id})
+        MERGE (inc:Incident {id: $incident_id})
+        ON CREATE SET
+            inc.title = 'Automated Test Incident',
+            inc.severity = 'CRITICAL',
+            inc.status = 'INVESTIGATED',
+            inc.patient_zero_id = $host_id,
+            inc.created_at = timestamp()
+        MERGE (inc)-[:TARGETS]->(h)
+        MERGE (inc)-[:AFFECTS]->(h)
+        """,
+        {"incident_id": incident_id, "host_id": host_id},
+    )
 
 
 # ──────────────────────────────────────────────
@@ -98,8 +121,8 @@ def test_auth_login_endpoint(monkeypatch):
     """Verify POST /api/v1/auth/token authenticates authorized user and rejects invalid credentials."""
     import uuid
 
-    alex_secret = f"test-secret-alex-{uuid.uuid4()}"
-    sarah_secret = f"test-secret-sarah-{uuid.uuid4()}"
+    alex_secret = f"test-secret-alex-{uuid.uuid4().hex}"
+    sarah_secret = f"test-secret-sarah-{uuid.uuid4().hex}"
     monkeypatch.setenv("ROOTMESH_SECRET_ALEX_RIVERA", alex_secret)
     monkeypatch.setenv("ROOTMESH_SECRET_SARAH_CHEN", sarah_secret)
     client = TestClient(app)
@@ -107,7 +130,7 @@ def test_auth_login_endpoint(monkeypatch):
     # Valid credentials
     res = client.post(
         "/api/v1/auth/token",
-        json={"username": "alex.rivera", "secret": alex_secret},
+        json={"username": "alex.rivera", "secret": alex_secret, "tenant_id": TENANT_ALPHA},
     )
     assert res.status_code == 200
     data = res.json()
@@ -206,6 +229,41 @@ def test_auth_login_fails_closed_when_env_credential_missing_or_empty(monkeypatc
     assert "Authentication failed" in res_req_ws.json()["detail"]
 
 
+def test_auth_login_fails_closed_when_env_credential_missing(monkeypatch):
+    """Verify POST /api/v1/auth/token fails closed (401) when ROOTMESH_SECRET_<USER> is missing or empty."""
+    client = TestClient(app)
+
+    # Ensure environment variables are absent
+    monkeypatch.delenv("ROOTMESH_SECRET_ALEX_RIVERA", raising=False)
+    monkeypatch.delenv("ROOTMESH_SECRET_SARAH_CHEN", raising=False)
+
+    # Attempt login with any secret when env variable is missing
+    res_missing = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": "any-attempted-secret", "tenant_id": TENANT_ALPHA},
+    )
+    assert res_missing.status_code == 401
+    assert "Invalid username or credentials" in res_missing.json()["detail"]
+
+    # Attempt login when env variable is explicitly empty
+    monkeypatch.setenv("ROOTMESH_SECRET_ALEX_RIVERA", "")
+    res_empty = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": "", "tenant_id": TENANT_ALPHA},
+    )
+    assert res_empty.status_code == 401
+    assert "Invalid username or credentials" in res_empty.json()["detail"]
+
+    # Attempt login when env variable is whitespace only
+    monkeypatch.setenv("ROOTMESH_SECRET_ALEX_RIVERA", "   ")
+    res_whitespace = client.post(
+        "/api/v1/auth/token",
+        json={"username": "alex.rivera", "secret": "   ", "tenant_id": TENANT_ALPHA},
+    )
+    assert res_whitespace.status_code == 401
+    assert "Invalid username or credentials" in res_whitespace.json()["detail"]
+
+
 def test_dev_token_endpoint():
     """
     Verify unauthenticated HTTP POST /api/v1/auth/dev-token returns HTTP 403 by default,
@@ -254,6 +312,7 @@ def test_rbac_least_privilege_enforcement():
     )
 
     headers = {"Authorization": f"Bearer {investigator_token}"}
+    _persist_test_incident("inc-rbac-test", "host-0")
     res = client.post(
         "/api/v1/incident/propose",
         headers=headers,
@@ -364,6 +423,7 @@ def test_incident_response_full_lifecycle_and_idempotency():
 
     incident_id = f"inc-guard-{int(time.time())}"
     host_id = "host-0"
+    _persist_test_incident(incident_id, host_id)
 
     # Stage 1-5: Propose Action
     prop_res = client.post(
@@ -444,6 +504,7 @@ def test_incident_rejection_fails_closed():
     headers = {"Authorization": f"Bearer {admin_token}"}
 
     # Propose
+    _persist_test_incident("inc-reject-test", "host-1")
     prop_res = client.post(
         "/api/v1/incident/propose",
         headers=headers,
@@ -481,6 +542,7 @@ def test_incident_expiration_fails_closed():
     admin_token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA, roles=["admin"])
     headers = {"Authorization": f"Bearer {admin_token}"}
 
+    _persist_test_incident("inc-expire-test", "host-2")
     prop_res = client.post(
         "/api/v1/incident/propose",
         headers=headers,
@@ -506,6 +568,243 @@ def test_incident_expiration_fails_closed():
     assert review_res.status_code == 410
     assert "expired" in review_res.json()["detail"].lower()
 
+    # Execution attempt on expired proposal must fail closed (410 Gone)
+    exec_res = client.post(
+        "/api/v1/incident/execute",
+        headers=headers,
+        json={"action_id": action_id, "idempotency_key": "idemp-expired-exec-1"},
+    )
+    assert exec_res.status_code == 410
+    assert "expired" in exec_res.json()["detail"].lower()
+
+
+def test_cross_tenant_proposal_review_and_execution_fails_closed():
+    """Verify Tenant Beta operator CANNOT review or execute a Tenant Alpha proposal (HTTP 403)."""
+    client = TestClient(app)
+    admin_alpha_token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA, roles=["admin"])
+    beta_token = generate_dev_token(username="beta.operator", tenant_id=TENANT_BETA, roles=["admin"])
+    headers_alpha = {"Authorization": f"Bearer {admin_alpha_token}"}
+    headers_beta = {"Authorization": f"Bearer {beta_token}"}
+
+    incident_id = f"inc-cross-{int(time.time())}"
+    _persist_test_incident(incident_id, "host-0", tenant_id=TENANT_ALPHA)
+
+    # Propose in Tenant Alpha
+    prop_res = client.post(
+        "/api/v1/incident/propose",
+        headers=headers_alpha,
+        json={
+            "incident_id": incident_id,
+            "tenant_id": TENANT_ALPHA,
+            "target_host_id": "host-0",
+            "justification": "Cross-tenant proposal security test",
+        },
+    )
+    assert prop_res.status_code == 200
+    action_id = prop_res.json()["action_id"]
+
+    # Beta operator attempts review -> 403 Forbidden
+    review_beta = client.post(
+        "/api/v1/incident/review",
+        headers=headers_beta,
+        json={"action_id": action_id, "decision": "APPROVE"},
+    )
+    assert review_beta.status_code == 403
+    assert "Cross-tenant access rejected" in review_beta.json()["detail"]
+
+    # Alpha approves
+    client.post(
+        "/api/v1/incident/review",
+        headers=headers_alpha,
+        json={"action_id": action_id, "decision": "APPROVE"},
+    )
+
+    # Beta operator attempts execute -> 403 Forbidden
+    exec_beta = client.post(
+        "/api/v1/incident/execute",
+        headers=headers_beta,
+        json={"action_id": action_id, "idempotency_key": "idemp-cross-beta-1"},
+    )
+    assert exec_beta.status_code == 403
+    assert "Cross-tenant access rejected" in exec_beta.json()["detail"]
+
+
+def test_unauthorized_review_and_execution_fails_closed():
+    """Verify principals lacking 'containment:approve' or 'containment:execute' are strictly rejected with 403."""
+    client = TestClient(app)
+    admin_token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA, roles=["admin"])
+    analyst_token = create_access_token(
+        principal_id="usr-analyst",
+        username="marcus.vance",
+        tenant_id=TENANT_ALPHA,
+        roles=["analyst"],
+    )
+    headers_admin = {"Authorization": f"Bearer {admin_token}"}
+    headers_analyst = {"Authorization": f"Bearer {analyst_token}"}
+
+    incident_id = f"inc-unauth-{int(time.time())}"
+    _persist_test_incident(incident_id, "host-0", tenant_id=TENANT_ALPHA)
+
+    prop_res = client.post(
+        "/api/v1/incident/propose",
+        headers=headers_admin,
+        json={
+            "incident_id": incident_id,
+            "tenant_id": TENANT_ALPHA,
+            "target_host_id": "host-0",
+            "justification": "Unauthorized review/execute test",
+        },
+    )
+    action_id = prop_res.json()["action_id"]
+
+    # Review attempt without containment:approve
+    review_res = client.post(
+        "/api/v1/incident/review",
+        headers=headers_analyst,
+        json={"action_id": action_id, "decision": "APPROVE"},
+    )
+    assert review_res.status_code == 403
+    assert "Principal lacks required permission" in review_res.json()["detail"]
+
+    # Authorized admin approves
+    client.post(
+        "/api/v1/incident/review",
+        headers=headers_admin,
+        json={"action_id": action_id, "decision": "APPROVE"},
+    )
+
+    # Execution attempt without containment:execute
+    exec_res = client.post(
+        "/api/v1/incident/execute",
+        headers=headers_analyst,
+        json={"action_id": action_id, "idempotency_key": "idemp-unauth-exec-1"},
+    )
+    assert exec_res.status_code == 403
+    assert "Principal lacks required permission" in exec_res.json()["detail"]
+
+
+def test_tampered_proposal_fails_closed():
+    """Verify tampered proposals in memory fail closed on execution."""
+    client = TestClient(app)
+    admin_token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA, roles=["admin"])
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    incident_id = f"inc-tamper-{int(time.time())}"
+    _persist_test_incident(incident_id, "host-0", tenant_id=TENANT_ALPHA)
+
+    prop_res = client.post(
+        "/api/v1/incident/propose",
+        headers=headers,
+        json={
+            "incident_id": incident_id,
+            "tenant_id": TENANT_ALPHA,
+            "target_host_id": "host-0",
+            "justification": "Tamper proposal verification",
+        },
+    )
+    action_id = prop_res.json()["action_id"]
+
+    # Admin approves
+    client.post(
+        "/api/v1/incident/review",
+        headers=headers,
+        json={"action_id": action_id, "decision": "APPROVE"},
+    )
+
+    # Tamper 1: Tamper with status out-of-band to unapproved PROPOSED
+    proposal = incident_service.get_proposal(action_id)
+    proposal.status = ActionState.PROPOSED
+
+    # Execution must fail closed (400 Bad Request: must be APPROVED before execution)
+    exec_res = client.post(
+        "/api/v1/incident/execute",
+        headers=headers,
+        json={"action_id": action_id, "idempotency_key": f"idemp-tamper-{int(time.time() * 1000)}"},
+    )
+    assert exec_res.status_code == 400
+    assert "must be APPROVED before execution" in exec_res.json()["detail"]
+
+    # Tamper 2: Invalid/tampered action_id must fail closed (404 Not Found)
+    exec_bad_id = client.post(
+        "/api/v1/incident/execute",
+        headers=headers,
+        json={"action_id": "act-tampered-nonexistent-999", "idempotency_key": "idemp-tamper-id-1"},
+    )
+    assert exec_bad_id.status_code == 404
+
+
+def test_missing_incident_proposal_fails_closed_404():
+    """Verify proposal referencing missing/unpersisted incident fails closed with HTTP 404."""
+    client = TestClient(app)
+    admin_token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA, roles=["admin"])
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    res = client.post(
+        "/api/v1/incident/propose",
+        headers=headers,
+        json={
+            "incident_id": "inc-completely-unpersisted-9999",
+            "tenant_id": TENANT_ALPHA,
+            "target_host_id": "host-0",
+            "justification": "Proposing containment without an investigated incident",
+        },
+    )
+    assert res.status_code == 404
+    assert "Proposals must reference a verified, persisted incident" in res.json()["detail"]
+
+
+def test_graph_mutations_limited_to_simulation():
+    """
+    Verify graph mutations are strictly limited to GRAPH_TOPOLOGY_SIMULATION behavior:
+    1. Host status -> CONTAINED, firewall -> true
+    2. Audit record containment_type -> GRAPH_TOPOLOGY_SIMULATION
+    3. Hardware enforcement note present
+    """
+    client = TestClient(app)
+    admin_token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA, roles=["admin"])
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    incident_id = f"inc-sim-{int(time.time())}"
+    _persist_test_incident(incident_id, "host-0", tenant_id=TENANT_ALPHA)
+
+    # Propose
+    prop_res = client.post(
+        "/api/v1/incident/propose",
+        headers=headers,
+        json={
+            "incident_id": incident_id,
+            "tenant_id": TENANT_ALPHA,
+            "target_host_id": "host-0",
+            "justification": "Simulation limitation audit",
+        },
+    )
+    action_id = prop_res.json()["action_id"]
+
+    # Review
+    client.post(
+        "/api/v1/incident/review",
+        headers=headers,
+        json={"action_id": action_id, "decision": "APPROVE"},
+    )
+
+    # Execute
+    exec_res = client.post(
+        "/api/v1/incident/execute",
+        headers=headers,
+        json={"action_id": action_id, "idempotency_key": f"idemp-sim-{int(time.time() * 1000)}"},
+    )
+    assert exec_res.status_code == 200
+    audit = exec_res.json()
+    assert audit["containment_type"] == "GRAPH_TOPOLOGY_SIMULATION"
+    assert "Physical hardware firewall rule enforcement requires authorized appliance connector" in audit["enforcement_note"]
+
+    # Verify FalkorDB graph state
+    graph = db_pool.get_tenant_graph(TENANT_ALPHA)
+    host_state = graph.ro_query("MATCH (h:Host {id: 'host-0'}) RETURN h.status, h.firewall").result_set
+    assert host_state[0][0] == "CONTAINED"
+    assert host_state[0][1] is True
+
+
 
 # ──────────────────────────────────────────────
 # 5. WebSocket Tenant Isolation & Real-Time Sync
@@ -518,8 +817,12 @@ async def test_websocket_tenant_scoped_broadcast_isolation():
     token_alpha = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA)
     token_beta = generate_dev_token(username="beta.operator", tenant_id=TENANT_BETA)
 
-    with client.websocket_connect(f"/ws/threat-stream?token={token_alpha}&tenant_id={TENANT_ALPHA}") as ws_alpha:
-        with client.websocket_connect(f"/ws/threat-stream?token={token_beta}&tenant_id={TENANT_BETA}") as ws_beta:
+    with client.websocket_connect("/ws/threat-stream") as ws_alpha:
+        ws_alpha.send_json({"type": "auth", "token": token_alpha, "tenant_id": TENANT_ALPHA})
+        assert ws_alpha.receive_json()["type"] == "auth_ok"
+        with client.websocket_connect("/ws/threat-stream") as ws_beta:
+            ws_beta.send_json({"type": "auth", "token": token_beta, "tenant_id": TENANT_BETA})
+            assert ws_beta.receive_json()["type"] == "auth_ok"
             # Broadcast event to Alpha only
             alpha_payload = {
                 "event_id": f"evt-alpha-{int(time.time() * 1000)}",
@@ -547,7 +850,9 @@ async def test_websocket_event_deduplication():
     client = TestClient(app)
     token = generate_dev_token(username="alex.rivera", tenant_id=TENANT_ALPHA)
 
-    with client.websocket_connect(f"/ws/threat-stream?token={token}&tenant_id={TENANT_ALPHA}") as ws:
+    with client.websocket_connect("/ws/threat-stream") as ws:
+        ws.send_json({"type": "auth", "token": token, "tenant_id": TENANT_ALPHA})
+        assert ws.receive_json()["type"] == "auth_ok"
         shared_event_id = f"evt-dedup-{int(time.time() * 1000)}"
         payload = {"event_id": shared_event_id, "type": "CONTAINMENT_TRIGGERED"}
 
@@ -607,8 +912,8 @@ def test_production_auth_cannot_be_bypassed(monkeypatch):
         headers=headers,
         json={"tenant_id": TENANT_ALPHA, "host_id": "host-0"},
     )
-    assert contain_res.status_code == 403
-    assert "Legacy direct containment route is disabled in production mode" in contain_res.json()["detail"]
+    assert contain_res.status_code == 410
+    assert "permanently disabled in all environments" in contain_res.json()["detail"]
 
 
 def test_persistent_idempotency_survives_process_restart():
@@ -624,13 +929,15 @@ def test_persistent_idempotency_survives_process_restart():
     headers = {"Authorization": f"Bearer {admin_token}"}
 
     idemp_key = f"restart-test-{int(time.time() * 1000)}"
+    incident_id = f"inc-restart-{int(time.time())}"
+    _persist_test_incident(incident_id, "host-0")
 
     # Propose and review through live API
     prop_res = client.post(
         "/api/v1/incident/propose",
         headers=headers,
         json={
-            "incident_id": f"inc-restart-{int(time.time())}",
+            "incident_id": incident_id,
             "tenant_id": TENANT_ALPHA,
             "target_host_id": "host-0",
             "justification": "Durable restart verification",
@@ -681,12 +988,14 @@ def test_concurrency_safe_idempotency_blocks_duplicate_execution():
     headers = {"Authorization": f"Bearer {admin_token}"}
 
     idemp_key = f"concurrent-test-{int(time.time() * 1000)}"
+    incident_id = f"inc-concurrent-{int(time.time())}"
+    _persist_test_incident(incident_id, "host-0")
 
     prop_res = client.post(
         "/api/v1/incident/propose",
         headers=headers,
         json={
-            "incident_id": f"inc-concurrent-{int(time.time())}",
+            "incident_id": incident_id,
             "tenant_id": TENANT_ALPHA,
             "target_host_id": "host-0",
             "justification": "Concurrency safety verification",

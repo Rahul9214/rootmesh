@@ -1,7 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import type { InvestigationSummary } from "./HeroSection";
+import { authenticatedFetch } from "@/lib/auth";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export interface InvestigationOperationTrace {
   id: string;
@@ -22,13 +25,18 @@ export interface LiveEvidenceComposerProps {
   incidentId?: string;
   activeTraceIndex?: number;
   onSelectOperation?: (opId: string) => void;
+  tenantId?: string;
+  lifecycleStatus?: string;
+  hasPersistedEvidence?: boolean;
 }
 
 function buildRecordedOperations(
   investigation: InvestigationSummary,
   selectedAssetId?: string,
   targetHost?: string,
-  incidentId?: string
+  incidentId?: string,
+  tenantId?: string,
+  livePageRank?: Array<{ host_name: string; ip: string; score: number }> | null
 ): InvestigationOperationTrace[] {
   const pzId = investigation.patient_zero_id || selectedAssetId || "host-0";
   const pzName = investigation.patient_zero_name || targetHost || "Workstation-PatientZero";
@@ -38,6 +46,7 @@ function buildRecordedOperations(
   const egressRisk = investigation.egress_risk_mbps || 43.0;
   const dbInfo = investigation.shortest_path_db;
   const brain = investigation.company_brain;
+  const effectiveTenant = tenantId || "authenticated_tenant";
 
   return [
     {
@@ -56,7 +65,7 @@ ORDER BY hops ASC, target.name ASC;`,
       parameters: {
         patient_zero_id: pzId,
         max_hops: 4,
-        tenant_id: "sec_ops_tenant_alpha",
+        tenant_id: effectiveTenant,
       },
       latencyMs: Number((execTime * 0.28).toFixed(2)),
       status: "EXECUTED",
@@ -129,19 +138,22 @@ LIMIT 5;`,
       parameters: {
         damping_factor: 0.85,
         iterations: 20,
-        tenant_graph: "sec_ops_tenant_alpha",
+        tenant_graph: effectiveTenant,
       },
       latencyMs: Number((execTime * 0.22).toFixed(2)),
       status: "EXECUTED",
       outputPayload: {
         ranking_rule: "FalkorDB GraphBLAS PageRank Centrality (ORDER BY score DESC)",
-        ranked_assets: [
-          { rank: 1, host: "EgressFirewall", ip: "10.0.99.254", pagerank_score: 0.0649, role: "Perimeter Sink" },
-          { rank: 2, host: "VLAN-Router", ip: "10.0.3.1", pagerank_score: 0.0389, role: "Core Transit" },
-          { rank: 3, host: "PublicWebServer", ip: "10.0.5.80", pagerank_score: 0.0351, role: "Ingress Gateway" },
-          { rank: 4, host: "JumpServer-SysAdmin", ip: "10.0.4.5", pagerank_score: 0.0279, role: "Bastion" },
-          { rank: 5, host: "ReverseProxy", ip: "10.0.5.1", pagerank_score: 0.0279, role: "TLS Proxy" },
-        ],
+        ranked_assets:
+          livePageRank && livePageRank.length > 0
+            ? livePageRank.slice(0, 5).map((a, i) => ({
+                rank: i + 1,
+                host: a.host_name,
+                ip: a.ip,
+                pagerank_score: a.score,
+                role: i === 0 ? "Perimeter Centrality Sink" : "Structural Transit Node",
+              }))
+            : [],
       },
       activeVectorHighlight: "pagerank",
     },
@@ -187,7 +199,7 @@ OPTIONAL MATCH (s)-[:HAS_CHANGE]->(cm:Commit)
 RETURN owning_team.name AS team, p.name AS oncall, rb.title AS sop, cm.sha AS commit;`,
       parameters: {
         host_id: pzId,
-        tenant_id: "sec_ops_tenant_alpha",
+        tenant_id: effectiveTenant,
       },
       latencyMs: Number((execTime * 0.12).toFixed(2)),
       status: "EXECUTED",
@@ -229,7 +241,7 @@ RETURN f.id AS finding_id, inc.id AS incident_id;`,
       outputPayload: {
         finding_id: `find-${incId.replace(/^inc-/, "") || "001"}`,
         incident_id: incId,
-        stored_in: "sec_ops_tenant_alpha graph",
+        stored_in: `${effectiveTenant} graph`,
         retrieval_mode: "Cross-Session Persistent",
         memory_type: "EPISODIC_GRAPH_NODE",
       },
@@ -245,33 +257,110 @@ export const LiveEvidenceComposer: React.FC<LiveEvidenceComposerProps> = ({
   incidentId = "inc-latest",
   activeTraceIndex = 0,
   onSelectOperation,
+  tenantId,
+  lifecycleStatus,
+  hasPersistedEvidence = false,
 }) => {
   const [selectedIdx, setSelectedIdx] = useState<number>(activeTraceIndex);
+  const [livePageRank, setLivePageRank] = useState<Array<{ host_name: string; ip: string; score: number }> | null>(null);
+
+  useEffect(() => {
+    if (!tenantId) {
+      setLivePageRank(null);
+      return;
+    }
+    const controller = new AbortController();
+    authenticatedFetch(`${API_BASE}/api/v1/threat/pagerank/${encodeURIComponent(tenantId)}`, {
+      signal: controller.signal,
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (!controller.signal.aborted && Array.isArray(data)) {
+          setLivePageRank(data);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      controller.abort();
+    };
+  }, [tenantId]);
 
   if (!investigation) {
+    const isInvestigated = Boolean(
+      hasPersistedEvidence ||
+      (lifecycleStatus && lifecycleStatus !== "AWAITING_INVESTIGATION" && incidentId && incidentId !== "inc-latest")
+    );
+
     return (
-      <div className="w-full rounded-2xl bg-[#FFFFFF] border border-[#DFD6C9] p-8 shadow-warm-sm text-center font-mono space-y-4">
-        <div className="w-12 h-12 mx-auto rounded-full bg-[#FAF7F2] border border-[#DFD6C9] flex items-center justify-center text-[#82465D] text-lg font-bold">
-          ◈
+      <div className="w-full rounded-xl bg-[#FAF7F2] border border-[#DFD6C9] p-3 sm:px-4 py-3 shadow-warm-xs font-mono text-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                isInvestigated ? "bg-[#26694E]" : "bg-[#A06316] animate-pulse"
+              }`}
+            />
+            <div className="truncate">
+              <span className="font-bold text-[#302B30]">
+                {isInvestigated
+                  ? "Live Cypher Execution Trace (Prior Session Cleared)"
+                  : "Awaiting Autonomous Investigation Execution"}
+              </span>
+              <span className="text-[#645C64] mx-2 hidden md:inline">·</span>
+              <span className="text-[11px] text-[#645C64] hidden md:inline truncate">
+                {isInvestigated
+                  ? `Incident ${incidentId || "inc-latest"} persisted in FalkorDB. Persisted findings preserved in dossier below.`
+                  : "Run autonomous threat investigation in Command Center to record live FalkorDB GraphBLAS traces."}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-[11px] shrink-0 self-end sm:self-auto">
+            {isInvestigated ? (
+              <a
+                href="#evidence-dossier"
+                className="px-2.5 py-1 rounded-md bg-[#FFFFFF] hover:bg-[#F5EFE6] border border-[#DFD6C9] text-[#26694E] font-bold transition-colors inline-flex items-center gap-1 cursor-pointer"
+              >
+                <span>Persisted Evidence: Preserved in Dossier</span>
+                <span>↓</span>
+              </a>
+            ) : (
+              <span className="px-2 py-0.5 rounded-md bg-[#FFFFFF] border border-[#DFD6C9] text-[#A06316] font-semibold">
+                Status: Awaiting Sweep
+              </span>
+            )}
+            <span className="text-[#928992] hidden sm:inline">
+              Host: <strong className="text-[#645C64]">{selectedAssetId || "host-0"}</strong>
+            </span>
+          </div>
         </div>
-        <div className="space-y-1">
-          <h4 className="text-sm font-bold text-[#302B30] uppercase tracking-wider">
-            Awaiting Autonomous Investigation Execution
-          </h4>
-          <p className="text-xs text-[#645C64] max-w-lg mx-auto leading-relaxed">
-            No verified Cypher execution trace is currently recorded. Run an autonomous threat investigation in the Command Center above to record and inspect live FalkorDB GraphBLAS multi-hop queries, sub-millisecond latencies, and structured output payloads.
-          </p>
-        </div>
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#FAF7F2] border border-[#DFD6C9] text-[11px] text-[#82465D]">
-          <span>Target Node: {targetHost || selectedAssetId || "host-0"}</span>
-          <span>·</span>
-          <span className="text-[#A06316]">Status: Awaiting Sweep</span>
-        </div>
+
+        {/* Optional Technical Parameter Disclosure (Truthful parameterized template, no fake timing) */}
+        <details className="mt-2 pt-2 border-t border-[#EEE6DC] text-[11px] text-[#645C64]">
+          <summary className="cursor-pointer text-[#82465D] hover:underline font-semibold select-none">
+            Query Architecture &amp; GraphBLAS Engine Details ▾
+          </summary>
+          <div className="mt-2 p-2.5 rounded-lg bg-[#FFFFFF] border border-[#EEE6DC] space-y-1.5 font-mono text-[10px] sm:text-[11px]">
+            <div>Engine: <strong className="text-[#302B30]">FalkorDB GraphBLAS Matrix Engine (Port 6379)</strong></div>
+            <div>Multi-hop Pattern: <code className="text-[#82465D] font-bold">MATCH (h:Host)-[:COMMUNICATES*1..4]-&gt;(target)</code></div>
+            <div>Perimeter Egress: <code className="text-[#D26A50] font-bold">MaxFlow MinCut Bottleneck Simulation</code></div>
+            <p className="text-[10px] text-[#928992] pt-1 border-t border-[#EEE6DC] italic">
+              Cypher traces are recorded in memory per active browser investigation sweep. Historical timing is not fabricated.
+            </p>
+          </div>
+        </details>
       </div>
     );
   }
 
-  const operations = buildRecordedOperations(investigation, selectedAssetId, targetHost, incidentId);
+  const operations = buildRecordedOperations(
+    investigation,
+    selectedAssetId,
+    targetHost,
+    incidentId,
+    tenantId,
+    livePageRank
+  );
   const activeOp = operations[selectedIdx] || operations[0];
 
   const handleTabChange = (idx: number) => {

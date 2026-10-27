@@ -21,8 +21,11 @@ class ConnectionManager:
         self.seen_event_ids: Set[str] = set()
 
     async def connect(self, ws: WebSocket, tenant_id: str = "sec_ops_tenant_alpha") -> None:
-        await ws.accept()
-        self.active_connections.append(ws)
+        from starlette.websockets import WebSocketState
+        if ws.application_state == WebSocketState.CONNECTING:
+            await ws.accept()
+        if ws not in self.active_connections:
+            self.active_connections.append(ws)
         if tenant_id not in self.tenant_connections:
             self.tenant_connections[tenant_id] = set()
         self.tenant_connections[tenant_id].add(ws)
@@ -79,6 +82,16 @@ class ConnectionManager:
                     stale.append(ws)
             for ws in stale:
                 self.disconnect(ws)
+
+    async def close_all(self, code: int = 1001, reason: str = "Server shutting down") -> None:
+        """Gracefully close all active WebSocket connections during server shutdown."""
+        sockets = list(self.active_connections)
+        for ws in sockets:
+            try:
+                await ws.close(code=code, reason=reason)
+            except Exception:
+                pass
+            self.disconnect(ws)
 
 
 ws_manager = ConnectionManager()

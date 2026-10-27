@@ -66,11 +66,8 @@ body {
   color: #302B30;
   font-family: var(--font-sans);
   min-height: 100vh;
-  background-image:
-    radial-gradient(ellipse 70% 40% at 50% -5%, rgba(210, 106, 80, 0.05) 0%, transparent 60%),
-    url("data:image/svg+xml,%3Csvg width='32' height='32' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='1.5' cy='1.5' r='1' fill='%23302B300A'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-attachment: fixed;
+  position: relative;
+  overflow-x: clip;
 }
 
 /* ── Custom Editorial Scrollbar ─────────────────────────────────────────── */

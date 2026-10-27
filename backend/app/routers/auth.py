@@ -43,12 +43,17 @@ async def acquire_token(req: LoginRequest):
     """
     Authenticate principal against authorized directory and issue signed JWT.
     Enforces signature, expiration, audience, and tenant binding.
-    Strictly disabled in production mode.
+    Strictly disabled in production mode (requires Clerk authentication).
     """
     if settings.is_production:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Legacy password token issuance is disabled in production mode.",
+            detail="Forbidden: Legacy password token issuance is disabled in production. Authenticate via Clerk B2B.",
+        )
+    if settings.clerk_jwks_url or settings.clerk_pem_public_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Legacy password token issuance is disabled when Clerk authentication is active. Authenticate via Clerk B2B.",
         )
 
     user = AUTHORIZED_USERS.get(req.username)
@@ -116,6 +121,11 @@ async def generate_development_token(req: DevTokenRequest):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden: Development token issuance is strictly disabled in production mode.",
+        )
+    if settings.clerk_jwks_url or settings.clerk_pem_public_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Development token issuance is disabled when Clerk authentication is active.",
         )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,

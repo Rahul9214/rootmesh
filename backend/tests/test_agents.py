@@ -8,8 +8,10 @@ import pytest
 from app.agents.triage import TriageAgent
 from app.agents.mitigation import MitigationAgent
 from app.agents.memory import MemoryAgent
+from app.db.test_guard import TEST_TENANT_ALPHA
 
-TENANT_ID = "sec_ops_tenant_alpha"
+TENANT_ID = TEST_TENANT_ALPHA
+
 
 
 @pytest.fixture
